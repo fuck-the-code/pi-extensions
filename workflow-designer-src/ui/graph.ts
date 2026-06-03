@@ -70,9 +70,9 @@ export function computeLayout(workflow: WorkflowDefinition, width: number, heigh
 
 export function measureNodeWidth(node: WorkflowNode): number {
 	const title = node.title ?? node.id;
-	const skill = `skill: ${node.skill ?? "-"}`;
-	const status = `status: ${node.status ?? "pending"}`;
-	return Math.max(20, Math.min(38, Math.max(title.length, skill.length, status.length) + 4));
+	const type = `type: ${node.type ?? "node"}`;
+	const verify = `verify: ${node.verification?.enabled === false || node.completionPolicy?.semanticVerification === false ? "off" : "on"}`;
+	return Math.max(20, Math.min(38, Math.max(title.length, type.length, verify.length) + 4));
 }
 
 export function orderLayersByBarycenter(layers: WorkflowNode[][], edges: WorkflowEdge[]): void {
@@ -202,8 +202,8 @@ export function drawNode(canvas: string[][], node: WorkflowNode, box: Required<W
 	const selectedMark = selected ? "> " : "";
 	putText(canvas, x, y, top);
 	putText(canvas, x, y + 1, `${midL}${pad(truncateToWidth(`${selectedMark}${node.title ?? node.id}`, inner, "..."), inner)}${midR}`);
-	putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`skill: ${node.skill ?? "-"}`, inner, "..."), inner)}${midR}`);
-	putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(`status: ${node.status ?? "pending"}`, inner, "..."), inner)}${midR}`);
+	putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`type: ${node.type ?? "node"}`, inner, "..."), inner)}${midR}`);
+	putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(`verify: ${node.verification?.enabled === false || node.completionPolicy?.semanticVerification === false ? "off" : "on"}`, inner, "..."), inner)}${midR}`);
 	putText(canvas, x, y + 4, bottom);
 }
 

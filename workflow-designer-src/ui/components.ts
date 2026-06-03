@@ -486,7 +486,7 @@ export class WorkflowDesignerComponent {
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 		const selected = this.workflow.nodes.find((n) => n.id === this.selectedId);
 		const summary = selected
-			? ` Selected: ${selected.id} | title: ${selected.title ?? ""} | goal: ${truncateToWidth(selected.goal ?? selected.description ?? "", 60, "...")}`
+			? ` Selected: ${selected.id} | type: ${selected.type ?? "node"} | executor: ${selected.executor?.kind ?? "agent"} | verify: ${selected.verification?.enabled === false || selected.completionPolicy?.semanticVerification === false ? "off" : "on"}`
 			: " No node selected";
 		lines.push(sideLine(pad(summary, innerW), th));
 		lines.push(sideLine(pad(` arrows select/auto-pan   |   wasd pan   |   Enter edit   |   r reload   |   Esc close   |   view ${this.panX},${this.panY}`, innerW), th));
