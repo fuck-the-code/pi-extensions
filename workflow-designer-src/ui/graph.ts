@@ -21,9 +21,11 @@ export function computeLayout(workflow: WorkflowDefinition, width: number, heigh
 	orderLayersByBarycenter(layers, workflow.edges);
 
 	const nodeWidths = new Map<string, number>();
+	const nodeHeights = new Map<string, number>();
 	for (const node of workflow.nodes) {
 		const preferred = node.layout?.width;
 		nodeWidths.set(node.id, clamp(preferred ?? measureNodeWidth(node), 20, node.executor?.kind === "multi-agent" ? 48 : 38));
+		nodeHeights.set(node.id, nodeHeight(node));
 	}
 
 	const layerWidths = layers.map((layer) => Math.max(0, ...layer.map((node) => nodeWidths.get(node.id) ?? 24)));
@@ -39,21 +41,23 @@ export function computeLayout(workflow: WorkflowDefinition, width: number, heigh
 	for (let rank = 0; rank < layers.length; rank++) {
 		const layer = layers[rank]!;
 		const layerW = layerWidths[rank] ?? 24;
-		const nodeH = 5;
 		const maxGapY = 4;
 		const minGapY = 1;
-		const availableYGap = layer.length <= 1 ? 0 : Math.floor((height - layer.length * nodeH) / (layer.length - 1));
+		const layerNodeH = layer.reduce((sum, node) => sum + (nodeHeights.get(node.id) ?? 5), 0);
+		const availableYGap = layer.length <= 1 ? 0 : Math.floor((height - layerNodeH) / (layer.length - 1));
 		const gapY = layer.length <= 1 ? 0 : clamp(availableYGap, minGapY, maxGapY);
-		const layerH = layer.length * nodeH + Math.max(0, layer.length - 1) * gapY;
+		const layerH = layerNodeH + Math.max(0, layer.length - 1) * gapY;
 		let y = Math.max(0, Math.floor((height - layerH) / 2));
 
 		for (const node of layer) {
 			const nodeW = nodeWidths.get(node.id) ?? 24;
+			const nodeH = nodeHeights.get(node.id) ?? 5;
 			const nodeX = x + Math.floor((layerW - nodeW) / 2);
 			result.set(node.id, {
 				x: clamp(nodeX, 0, Math.max(0, width - nodeW - 1)),
 				y: clamp(y, 0, Math.max(0, height - nodeH)),
 				width: nodeW,
+				height: nodeH,
 			});
 			y += nodeH + gapY;
 		}
@@ -78,6 +82,11 @@ export function measureNodeWidth(node: WorkflowNode): number {
 
 export function agentNamesLine(node: WorkflowNode): string {
 	return (node.executor?.agents ?? []).map((agent) => agent.id).join(", ");
+}
+
+export function nodeHeight(node: WorkflowNode): number {
+	if (node.executor?.kind !== "multi-agent") return 5;
+	return Math.max(5, 4 + (node.executor.agents?.length ?? 0));
 }
 
 export function orderLayersByBarycenter(layers: WorkflowNode[][], edges: WorkflowEdge[]): void {
@@ -130,7 +139,7 @@ export function centerLayout(
 		minX = Math.min(minX, box.x);
 		minY = Math.min(minY, box.y);
 		maxX = Math.max(maxX, box.x + box.width);
-		maxY = Math.max(maxY, box.y + 5);
+		maxY = Math.max(maxY, box.y + (box.height ?? 5));
 	}
 
 	const contentW = maxX - minX;
@@ -143,7 +152,7 @@ export function centerLayout(
 		centered.set(id, {
 			...box,
 			x: clamp(box.x + dx, 0, Math.max(0, width - box.width - 1)),
-			y: clamp(box.y + dy, 0, Math.max(0, height - 5)),
+			y: clamp(box.y + dy, 0, Math.max(0, height - (box.height ?? 5))),
 		});
 	}
 	return centered;
@@ -179,9 +188,9 @@ export function drawEdges(canvas: string[][], workflow: WorkflowDefinition, layo
 		// Keep edges outside node boxes. The arrow stops immediately before the
 		// target border, preserving the rectangle and avoiding apparent text shifts.
 		const sx = from.x + from.width;
-		const sy = from.y + 2;
+		const sy = from.y + Math.floor((from.height ?? 5) / 2);
 		const tx = to.x - 1;
-		const ty = to.y + 2;
+		const ty = to.y + Math.floor((to.height ?? 5) / 2);
 		if (sx > tx) continue;
 		const mid = Math.floor((sx + tx) / 2);
 		drawH(canvas, sx, mid, sy);
@@ -203,18 +212,24 @@ export function drawNode(canvas: string[][], node: WorkflowNode, box: Required<W
 	const top = selected ? `*${"=".repeat(inner)}*` : `+${"-".repeat(inner)}+`;
 	const midL = selected ? "|" : "|";
 	const midR = selected ? "|" : "|";
+	const h = Math.max(5, box.height ?? nodeHeight(node));
 	const bottom = selected ? `*${"=".repeat(inner)}*` : `+${"-".repeat(inner)}+`;
 	const selectedMark = selected ? "> " : "";
 	putText(canvas, x, y, top);
 	putText(canvas, x, y + 1, `${midL}${pad(truncateToWidth(`${selectedMark}${node.title ?? node.id}`, inner, "..."), inner)}${midR}`);
 	if (node.executor?.kind === "multi-agent") {
 		putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`cluster: ${node.executor.agents?.length ?? 0} agents`, inner, "..."), inner)}${midR}`);
-		putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(agentNamesLine(node), inner, "..."), inner)}${midR}`);
+		let line = 3;
+		for (const agent of node.executor.agents ?? []) {
+			if (line >= h - 1) break;
+			putText(canvas, x, y + line, `${midL}${pad(truncateToWidth(`- ${agent.id}`, inner, "..."), inner)}${midR}`);
+			line++;
+		}
 	} else {
 		putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`type: ${node.type ?? "node"}`, inner, "..."), inner)}${midR}`);
 		putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(`exec: ${node.executor?.kind ?? "agent"}`, inner, "..."), inner)}${midR}`);
 	}
-	putText(canvas, x, y + 4, bottom);
+	putText(canvas, x, y + h - 1, bottom);
 }
 
 export function drawH(canvas: string[][], x1: number, x2: number, y: number): void {

@@ -5,7 +5,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeLayout, WorkflowRun, WorkflowRunNodeState } from "../types";
 import { bottomBorder, clamp, isEnter, matchesKey, pad, padAnsi, sideLine, topBorder, truncateToWidth } from "./common";
-import { centerLayout, computeLayout, computeRanks, createCanvas, drawEdges, drawNode } from "./graph";
+import { centerLayout, computeLayout, computeRanks, createCanvas, drawEdges, drawNode, nodeHeight } from "./graph";
 
 export class RunListComponent {
 	private selected = 0;
@@ -501,15 +501,15 @@ export class WorkflowDesignerComponent {
 	private virtualCanvasSize(viewW: number, viewH: number): { width: number; height: number } {
 		const ranks = computeRanks(this.workflow);
 		const rankCount = Math.max(1, Math.max(0, ...Array.from(ranks.values())) + 1);
-		const nodesPerRank = new Map<number, number>();
+		const rankHeights = new Map<number, number>();
 		for (const node of this.workflow.nodes) {
 			const rank = ranks.get(node.id) ?? 0;
-			nodesPerRank.set(rank, (nodesPerRank.get(rank) ?? 0) + 1);
+			rankHeights.set(rank, (rankHeights.get(rank) ?? 0) + nodeHeight(node) + 2);
 		}
-		const maxLayerNodes = Math.max(1, ...Array.from(nodesPerRank.values()));
+		const maxLayerHeight = Math.max(1, ...Array.from(rankHeights.values()));
 		return {
-			width: Math.max(viewW, rankCount * 48 + 8),
-			height: Math.max(viewH, maxLayerNodes * 8 + 4),
+			width: Math.max(viewW, rankCount * 52 + 8),
+			height: Math.max(viewH, maxLayerHeight + 4),
 		};
 	}
 
@@ -533,7 +533,7 @@ export class WorkflowDesignerComponent {
 		if (box.x < this.panX + marginX) this.panX = Math.max(0, box.x - marginX);
 		else if (box.x + box.width > this.panX + this.lastViewW - marginX) this.panX = box.x + box.width - this.lastViewW + marginX;
 		if (box.y < this.panY + marginY) this.panY = Math.max(0, box.y - marginY);
-		else if (box.y + 5 > this.panY + this.lastViewH - marginY) this.panY = box.y + 5 - this.lastViewH + marginY;
+		else if (box.y + (box.height ?? 5) > this.panY + this.lastViewH - marginY) this.panY = box.y + (box.height ?? 5) - this.lastViewH + marginY;
 	}
 
 	private selectByDirection(direction: "left" | "right" | "up" | "down"): void {

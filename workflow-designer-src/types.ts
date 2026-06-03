@@ -2,6 +2,7 @@ export interface WorkflowNodeLayout {
 	x?: number;
 	y?: number;
 	width?: number;
+	height?: number;
 }
 
 export interface WorkflowNodeExecutorAgent {
