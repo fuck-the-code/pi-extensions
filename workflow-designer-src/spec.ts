@@ -35,6 +35,13 @@ export function createInitialNodeStates(workflow: WorkflowDefinition): Record<st
 	return states;
 }
 
+export function readWorkflowNameFromSpec(path: string): string | null {
+	const content = readFileSync(path, "utf-8");
+	return content.match(/^workflow:\s*([A-Za-z0-9_-]+)\s*$/m)?.[1]
+		?? content.match(/^>\s*Workflow:\s*([A-Za-z0-9_-]+)\s*$/m)?.[1]
+		?? null;
+}
+
 export function validateSpec(path: string, validation: WorkflowInputValidation | undefined): { errors: string[] } {
 	const errors: string[] = [];
 	const content = readFileSync(path, "utf-8");

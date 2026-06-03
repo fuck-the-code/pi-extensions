@@ -20,6 +20,7 @@ import {
 	createInitialNodeStates,
 	listSpecFiles,
 	makeRunId,
+	readWorkflowNameFromSpec,
 	validateSpec,
 } from "./spec";
 import {
@@ -247,6 +248,15 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 		ctx.ui.notify(`Spec file not found: ${specPath}`, "error");
 		return;
 	}
+	const declaredWorkflow = readWorkflowNameFromSpec(absSpecPath);
+	if (declaredWorkflow && declaredWorkflow !== workflow.name) {
+		ctx.ui.notify(`Spec declares workflow ${declaredWorkflow}, but selected workflow is ${workflow.name}.`, "error");
+		return;
+	}
+	if (!declaredWorkflow) {
+		ctx.ui.notify(`Spec must declare its workflow. Add frontmatter: workflow: ${workflow.name}`, "error");
+		return;
+	}
 
 	const validation = validateSpec(absSpecPath, workflow.inputs?.spec?.validation);
 	if (validation.errors.length > 0) {
@@ -289,32 +299,16 @@ function looksLikeExistingSpecPath(cwd: string, value: string): boolean {
 
 async function inferWorkflowForSpec(ctx: ExtensionCommandContext, specPath: string): Promise<string | null> {
 	const absSpecPath = isAbsolute(specPath) ? specPath : join(ctx.cwd, specPath);
-	const raw = readFileSync(absSpecPath, "utf-8");
-	const declared = raw.match(/^workflow:\s*([A-Za-z0-9_-]+)\s*$/m)?.[1] ?? raw.match(/^>\s*Workflow:\s*([A-Za-z0-9_-]+)\s*$/m)?.[1];
-
-	const workflows = listWorkflowNames(ctx.cwd);
-	const valid: string[] = [];
-	for (const name of workflows) {
-		try {
-			const workflow = loadWorkflow(getWorkflowPath(ctx.cwd, name));
-			if (validateSpec(absSpecPath, workflow.inputs?.spec?.validation).errors.length === 0) valid.push(name);
-		} catch {
-			// Ignore invalid workflow templates while inferring from a spec path.
-		}
-	}
-
-	if (declared && valid.includes(declared)) return declared;
-	if (declared && workflows.includes(declared)) {
-		ctx.ui.notify(`Spec declares workflow ${declared}, but validation failed for that workflow.`, "error");
+	const declared = readWorkflowNameFromSpec(absSpecPath);
+	if (!declared) {
+		ctx.ui.notify(`Spec must declare its workflow. Add frontmatter like: workflow: code-review`, "error");
 		return null;
 	}
-	if (valid.length === 1) return valid[0]!;
-	if (valid.length > 1) {
-		ctx.ui.notify(`Spec matches multiple workflows: ${valid.join(", ")}. Use /workflow:run <workflow> <spec>.`, "error");
+	if (!listWorkflowNames(ctx.cwd).includes(declared)) {
+		ctx.ui.notify(`Spec declares unknown workflow: ${declared}`, "error");
 		return null;
 	}
-	ctx.ui.notify(`Could not infer a workflow for spec: ${specPath}. Use /workflow:run <workflow> <spec>.`, "error");
-	return null;
+	return declared;
 }
 
 async function startWorkflowRun(runPath: string, ctx: ExtensionCommandContext): Promise<void> {
