@@ -23,7 +23,7 @@ export function computeLayout(workflow: WorkflowDefinition, width: number, heigh
 	const nodeWidths = new Map<string, number>();
 	for (const node of workflow.nodes) {
 		const preferred = node.layout?.width;
-		nodeWidths.set(node.id, clamp(preferred ?? measureNodeWidth(node), 20, 38));
+		nodeWidths.set(node.id, clamp(preferred ?? measureNodeWidth(node), 20, node.executor?.kind === "multi-agent" ? 48 : 38));
 	}
 
 	const layerWidths = layers.map((layer) => Math.max(0, ...layer.map((node) => nodeWidths.get(node.id) ?? 24)));
@@ -72,7 +72,12 @@ export function measureNodeWidth(node: WorkflowNode): number {
 	const title = node.title ?? node.id;
 	const type = `type: ${node.type ?? "node"}`;
 	const exec = node.executor?.kind === "multi-agent" ? `cluster: ${node.executor.agents?.length ?? 0} agents` : `exec: ${node.executor?.kind ?? "agent"}`;
-	return Math.max(20, Math.min(38, Math.max(title.length, type.length, exec.length) + 4));
+	const agents = node.executor?.kind === "multi-agent" ? agentNamesLine(node) : "";
+	return Math.max(20, Math.min(node.executor?.kind === "multi-agent" ? 48 : 38, Math.max(title.length, type.length, exec.length, agents.length) + 4));
+}
+
+export function agentNamesLine(node: WorkflowNode): string {
+	return (node.executor?.agents ?? []).map((agent) => agent.id).join(", ");
 }
 
 export function orderLayersByBarycenter(layers: WorkflowNode[][], edges: WorkflowEdge[]): void {
@@ -202,9 +207,13 @@ export function drawNode(canvas: string[][], node: WorkflowNode, box: Required<W
 	const selectedMark = selected ? "> " : "";
 	putText(canvas, x, y, top);
 	putText(canvas, x, y + 1, `${midL}${pad(truncateToWidth(`${selectedMark}${node.title ?? node.id}`, inner, "..."), inner)}${midR}`);
-	putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`type: ${node.type ?? "node"}`, inner, "..."), inner)}${midR}`);
-	const exec = node.executor?.kind === "multi-agent" ? `cluster: ${node.executor.agents?.length ?? 0} agents` : `exec: ${node.executor?.kind ?? "agent"}`;
-	putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(exec, inner, "..."), inner)}${midR}`);
+	if (node.executor?.kind === "multi-agent") {
+		putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`cluster: ${node.executor.agents?.length ?? 0} agents`, inner, "..."), inner)}${midR}`);
+		putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(agentNamesLine(node), inner, "..."), inner)}${midR}`);
+	} else {
+		putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`type: ${node.type ?? "node"}`, inner, "..."), inner)}${midR}`);
+		putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(`exec: ${node.executor?.kind ?? "agent"}`, inner, "..."), inner)}${midR}`);
+	}
 	putText(canvas, x, y + 4, bottom);
 }
 
