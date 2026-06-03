@@ -212,8 +212,14 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 				return;
 			}
 		} catch {
-			// Not a run id/path; treat it as a workflow name below.
+			// Not a run id/path; treat it as a workflow name or spec path below.
 		}
+	}
+
+	if (workflowName && !specPath && looksLikeExistingSpecPath(ctx.cwd, workflowName)) {
+		specPath = workflowName;
+		workflowName = await inferWorkflowForSpec(ctx, specPath);
+		if (!workflowName) return;
 	}
 
 	if (!workflowName) {
@@ -273,6 +279,42 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 	writeFileSync(runPath, `${JSON.stringify(run, null, "\t")}\n`, "utf-8");
 	ctx.ui.notify(`Created workflow run: ${relative(ctx.cwd, runPath)}. Starting auto-run...`, "info");
 	await startWorkflowRun(runPath, ctx);
+}
+
+function looksLikeExistingSpecPath(cwd: string, value: string): boolean {
+	if (!/\.(md|markdown)$/i.test(value) && !value.includes("/")) return false;
+	const abs = isAbsolute(value) ? value : join(cwd, value);
+	return existsSync(abs) && statSync(abs).isFile();
+}
+
+async function inferWorkflowForSpec(ctx: ExtensionCommandContext, specPath: string): Promise<string | null> {
+	const absSpecPath = isAbsolute(specPath) ? specPath : join(ctx.cwd, specPath);
+	const raw = readFileSync(absSpecPath, "utf-8");
+	const declared = raw.match(/^workflow:\s*([A-Za-z0-9_-]+)\s*$/m)?.[1] ?? raw.match(/^>\s*Workflow:\s*([A-Za-z0-9_-]+)\s*$/m)?.[1];
+
+	const workflows = listWorkflowNames(ctx.cwd);
+	const valid: string[] = [];
+	for (const name of workflows) {
+		try {
+			const workflow = loadWorkflow(getWorkflowPath(ctx.cwd, name));
+			if (validateSpec(absSpecPath, workflow.inputs?.spec?.validation).errors.length === 0) valid.push(name);
+		} catch {
+			// Ignore invalid workflow templates while inferring from a spec path.
+		}
+	}
+
+	if (declared && valid.includes(declared)) return declared;
+	if (declared && workflows.includes(declared)) {
+		ctx.ui.notify(`Spec declares workflow ${declared}, but validation failed for that workflow.`, "error");
+		return null;
+	}
+	if (valid.length === 1) return valid[0]!;
+	if (valid.length > 1) {
+		ctx.ui.notify(`Spec matches multiple workflows: ${valid.join(", ")}. Use /workflow:run <workflow> <spec>.`, "error");
+		return null;
+	}
+	ctx.ui.notify(`Could not infer a workflow for spec: ${specPath}. Use /workflow:run <workflow> <spec>.`, "error");
+	return null;
 }
 
 async function startWorkflowRun(runPath: string, ctx: ExtensionCommandContext): Promise<void> {
