@@ -42,8 +42,12 @@ export function validateSpec(path: string, validation: WorkflowInputValidation |
 		const pattern = new RegExp(`(^|\\n)#{1,6}\\s+${escapeRegExp(section)}\\b`, "i");
 		if (!pattern.test(content)) errors.push(`missing section: ${section}`);
 	}
+	const contentForForbiddenCheck = content
+		.split("\n")
+		.filter((line) => !/^\s*>\s*Do not leave placeholders:/i.test(line))
+		.join("\n");
 	for (const placeholder of validation?.forbiddenPlaceholders ?? []) {
-		if (content.includes(placeholder)) errors.push(`contains placeholder: ${placeholder}`);
+		if (contentForForbiddenCheck.includes(placeholder)) errors.push(`contains placeholder: ${placeholder}`);
 	}
 	return { errors };
 }
@@ -81,7 +85,7 @@ export function buildSpecTemplateMarkdown(workflow: WorkflowDefinition): string 
 	lines.push(`> Workflow: ${workflow.name}`);
 	lines.push(`> Template: ${template}`);
 	if (forbidden.length > 0) {
-		lines.push(`> Do not leave placeholders: ${forbidden.join(", ")}`);
+		lines.push("> Fill every generated placeholder before running this workflow.");
 	}
 	lines.push("");
 
