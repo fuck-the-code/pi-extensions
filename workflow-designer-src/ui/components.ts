@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
@@ -151,9 +151,16 @@ export class RunDetailComponent {
 		const nodeId = Object.keys(this.run.nodes)[this.selected];
 		if (!nodeId) return;
 		const runDir = dirname(this.runPath);
-		const transcriptPath = join(runDir, "nodes", nodeId, "agent-output.md");
-		const eventsPath = join(runDir, "nodes", nodeId, "events.jsonl");
-		const target = existsSync(transcriptPath) ? transcriptPath : existsSync(eventsPath) ? eventsPath : undefined;
+		const nodeDir = join(runDir, "nodes", nodeId);
+		const transcriptPath = join(nodeDir, "agent-output.md");
+		const eventsPath = join(nodeDir, "events.jsonl");
+		const workflowNode = this.workflowNode(nodeId);
+		let target: string | undefined;
+		if (workflowNode?.executor?.kind === "multi-agent") {
+			target = this.writeCombinedMultiAgentTranscript(nodeId, workflowNode) ?? (existsSync(transcriptPath) ? transcriptPath : undefined);
+		} else {
+			target = existsSync(transcriptPath) ? transcriptPath : existsSync(eventsPath) ? eventsPath : undefined;
+		}
 		if (!target) {
 			this.message = `no conversation file for ${nodeId}`;
 			return;
@@ -165,6 +172,14 @@ export class RunDetailComponent {
 		} catch (err) {
 			this.message = `failed to open code: ${err instanceof Error ? err.message : String(err)}`;
 		}
+	}
+
+	private writeCombinedMultiAgentTranscript(nodeId: string, node: WorkflowNode): string | undefined {
+		const outputPath = join(dirname(this.runPath), "nodes", nodeId, "multi-agent-output.md");
+		const lines = this.multiAgentConversationLines(nodeId, node, 10_000);
+		if (lines.length <= 3) return undefined;
+		writeFileSync(outputPath, `${lines.join("\n")}\n`, "utf-8");
+		return outputPath;
 	}
 
 	private nodeViewLines(nodeId: string, state: WorkflowRunNodeState, width: number): string[] {

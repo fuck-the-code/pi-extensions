@@ -476,6 +476,9 @@ async function executeMultiAgentNode(
 		});
 		writeFileSync(join(phaseDir, "agent-output.md"), result.output, "utf-8");
 		phaseSummaries.push(`## Phase: ${phase.id}\n\nAgent: ${phase.agent}\nExit: ${result.exitCode}\n\nTranscript: ${relative(ctx.cwd, join(phaseDir, "agent-output.md"))}`);
+		// Keep the parent multi-agent node transcript useful while the node is still
+		// running, so inspect/Q can open a live phase summary instead of showing no file.
+		writeFileSync(join(nodeDir, "agent-output.md"), phaseSummaries.join("\n\n"), "utf-8");
 		if (result.exitCode !== 0) {
 			const output = phaseSummaries.join("\n\n");
 			writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
@@ -583,7 +586,10 @@ async function inspectWorkflowRun(args: string | undefined, ctx: ExtensionComman
 		if (!runPath) return;
 	}
 
-	const run = reconcileRunFromArtifacts(runPath, ctx.cwd);
+	let run = reconcileRunFromArtifacts(runPath, ctx.cwd);
+	if (!activeWorkflowExecutions.has(runPath) && Object.values(run.nodes).some((state) => state.status === "running")) {
+		run = markStaleRunningNodesInterrupted(runPath, ctx.cwd);
+	}
 	const result = await ctx.ui.custom<{ action: "close" | "retry"; nodeId?: string } | undefined>((tui, theme, _kb, done) => {
 		return new RunDetailComponent(tui, theme, ctx.cwd, runPath!, run, done);
 	}, {
@@ -662,6 +668,25 @@ async function updateRunSerialized(runPath: string, updater: (run: WorkflowRun) 
 
 function readyNodeIds(run: WorkflowRun): string[] {
 	return Object.entries(run.nodes).filter(([, state]) => state.status === "ready").map(([id]) => id);
+}
+
+function markStaleRunningNodesInterrupted(runPath: string, cwd: string): WorkflowRun {
+	const run = loadRun(runPath);
+	if (run.status === "aborted") return run;
+	const now = new Date().toISOString();
+	let changed = false;
+	for (const state of Object.values(run.nodes)) {
+		if (state.status !== "running") continue;
+		state.status = "failed";
+		state.completedAt = now;
+		state.summary = state.summary ? `${state.summary}; interrupted with no active executor` : "interrupted with no active executor";
+		changed = true;
+	}
+	if (changed) {
+		updateRunAggregateStatus(run);
+		saveRun(runPath, run);
+	}
+	return run;
 }
 
 function reconcileRunFromArtifacts(runPath: string, cwd: string, onlyNodeId?: string): WorkflowRun {
