@@ -1,3 +1,6 @@
+import type { WorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowNodeLayout } from "../types";
+import { clamp, pad, truncateToWidth } from "./common";
+
 export function computeLayout(workflow: WorkflowDefinition, width: number, height: number): Map<string, Required<WorkflowNodeLayout>> {
 	// Dagre-style layered layout, left-to-right:
 	// 1. assign each node to a rank by longest path from sources
