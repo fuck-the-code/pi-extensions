@@ -602,7 +602,7 @@ export class NodeEditorComponent {
 		private done: (result: EditResult) => void,
 	) {
 		this.originalId = node.id;
-		this.lines = JSON.stringify(node, null, "\t").split("\n");
+		this.lines = JSON.stringify(node, null, 2).split("\n");
 	}
 
 	handleInput(data: string): void {
@@ -641,13 +641,15 @@ export class NodeEditorComponent {
 		for (let i = 0; i < bodyH; i++) {
 			const index = this.scroll + i;
 			const rawLine = this.lines[index] ?? "";
-			let line = rawLine;
+			const displayRawLine = rawLine.replace(/\t/g, "  ");
+			let line = displayRawLine;
 			if (index === this.cursorLine) {
-				const col = clamp(this.cursorCol, 0, rawLine.length);
-				line = `${rawLine.slice(0, col)}${th.fg("accent", "▌")}${rawLine.slice(col)}`;
+				const col = clamp(this.cursorCol, 0, displayRawLine.length);
+				line = `${displayRawLine.slice(0, col)}${th.fg("accent", "▌")}${displayRawLine.slice(col)}`;
 			}
 			const gutter = index < this.lines.length ? `${String(index + 1).padStart(gutterW - 1, " ")} ` : " ".repeat(gutterW);
-			rendered.push(sideLine(padAnsi(th.fg("dim", gutter) + truncateToWidth(line, innerW - gutterW, "..."), innerW), th));
+			const content = th.fg("dim", gutter) + truncateToWidth(line, Math.max(1, innerW - gutterW - 1), "...");
+			rendered.push(sideLine(truncateToWidth(padAnsi(content, innerW), innerW, "", true), th));
 		}
 		rendered.push(sideLine("-".repeat(innerW), th, "+", "+"));
 		const error = this.error ? ` | ${this.error}` : "";
@@ -675,6 +677,8 @@ export class NodeEditorComponent {
 				this.lines.splice(this.cursorLine + 1, 0, after);
 				this.cursorLine++;
 				this.cursorCol = 0;
+			} else if (ch === "\t") {
+				this.insertText("  ");
 			} else if (ch.charCodeAt(0) >= 32) {
 				const current = this.lines[this.cursorLine] ?? "";
 				this.lines[this.cursorLine] = `${current.slice(0, this.cursorCol)}${ch}${current.slice(this.cursorCol)}`;
