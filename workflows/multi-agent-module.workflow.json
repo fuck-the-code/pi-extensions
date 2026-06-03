@@ -1,0 +1,171 @@
+{
+	"version": 1,
+	"name": "multi-agent-module",
+	"description": "Example workflow showing a single DAG node internally coordinated by multiple real Pi sub-agents: manager, developer, tester, final manager.",
+	"inputs": {
+		"spec": {
+			"type": "file",
+			"required": true,
+			"template": "multi-agent-module-spec-v1",
+			"validation": {
+				"requiredSections": [
+					"Goal",
+					"Module Scope",
+					"Acceptance Criteria",
+					"Constraints",
+					"Validation / Tests"
+				],
+				"forbiddenPlaceholders": [
+					"TODO",
+					"TBD",
+					"<fill me>"
+				]
+			}
+		}
+	},
+	"nodes": [
+		{
+			"id": "module-build",
+			"title": "Module Build",
+			"type": "implementation",
+			"goal": "Implement the target module using managed collaboration between manager, developer, and tester sub-agents.",
+			"inputs": [
+				"{{inputs.spec}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "multi-agent",
+				"coordinator": "manager",
+				"protocol": {
+					"mode": "managed-routing",
+					"broadcast": false,
+					"sharedArtifactsDir": "shared",
+					"rule": "Only the manager decides which agent acts next. Agents do not broadcast requests or review unassigned work."
+				},
+				"agents": [
+					{
+						"id": "manager",
+						"role": "Coordinator / engineering manager",
+						"responsibilities": [
+							"Read the spec and create a scoped implementation plan",
+							"Assign focused work to developer",
+							"Decide when tester should review",
+							"Own final result.json and report.md"
+						],
+						"canDecideCompletion": true
+					},
+					{
+						"id": "developer",
+						"role": "Developer",
+						"responsibilities": [
+							"Implement only the manager-assigned module scope",
+							"Write shared/implementation-report.md",
+							"Send a directed message back to manager"
+						]
+					},
+					{
+						"id": "tester",
+						"role": "Tester / reviewer",
+						"responsibilities": [
+							"Review only when manager requests it",
+							"Check acceptance criteria, edge cases, and regression risks",
+							"Write shared/test-report.md and a directed message to manager"
+						]
+					}
+				],
+				"phases": [
+					{
+						"id": "manager-plan",
+						"agent": "manager",
+						"goal": "Create a concise implementation plan and directed task for developer.",
+						"prompt": "Read the spec. Write shared/plan.md with scope, approach, files likely involved, risks, and acceptance criteria. Then write messages/manager-to-developer.jsonl with a developer task. Do not ask tester to act yet.",
+						"inputs": [
+							"{{inputs.spec}}"
+						],
+						"outputs": [
+							"shared/plan.md",
+							"messages/manager-to-developer.jsonl"
+						]
+					},
+					{
+						"id": "developer-implement",
+						"agent": "developer",
+						"goal": "Implement the manager-assigned module work and report what changed.",
+						"prompt": "Read shared/plan.md and messages/manager-to-developer.jsonl. Implement the assigned work if the spec is concrete enough. Write shared/implementation-report.md with changed files, decisions, and remaining risks. Write messages/developer-to-manager.jsonl. Do not ask tester directly.",
+						"inputs": [
+							"shared/plan.md",
+							"messages/manager-to-developer.jsonl"
+						],
+						"outputs": [
+							"shared/implementation-report.md",
+							"messages/developer-to-manager.jsonl"
+						]
+					},
+					{
+						"id": "tester-review",
+						"agent": "tester",
+						"triggeredBy": "manager",
+						"goal": "Review the developer output against acceptance criteria and regression risks.",
+						"prompt": "Read the spec, shared/plan.md, and shared/implementation-report.md. Review only the assigned scope. Write shared/test-report.md with pass/fail observations, missing tests, and recommended fixes. Write messages/tester-to-manager.jsonl. Do not expand into unrelated review dimensions.",
+						"inputs": [
+							"{{inputs.spec}}",
+							"shared/plan.md",
+							"shared/implementation-report.md"
+						],
+						"outputs": [
+							"shared/test-report.md",
+							"messages/tester-to-manager.jsonl"
+						]
+					},
+					{
+						"id": "manager-finalize",
+						"agent": "manager",
+						"goal": "Decide final node completion and write parent node outputs.",
+						"prompt": "Read all shared artifacts and messages. Write report.md as the final module-build report. Write result.json with status completed if the node goal was addressed, needs-revision if implementation is incomplete but actionable, or failed only for execution failure. Include outputs [\"report.md\", \"result.json\"].",
+						"inputs": [
+							"shared/plan.md",
+							"shared/implementation-report.md",
+							"shared/test-report.md",
+							"messages/developer-to-manager.jsonl",
+							"messages/tester-to-manager.jsonl"
+						],
+						"outputs": [
+							"report.md",
+							"result.json"
+						]
+					}
+				]
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": true,
+				"findingsAreSuccess": false,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Manager produced a concrete plan",
+					"Developer addressed the assigned module scope or clearly explained why it could not be implemented",
+					"Tester reviewed only the assigned scope",
+					"Final report summarizes plan, implementation, test review, and remaining risks",
+					"result.json accurately reflects completion status"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 8,
+				"y": 8,
+				"width": 34
+			}
+		}
+	],
+	"edges": []
+}

@@ -4,13 +4,41 @@ export interface WorkflowNodeLayout {
 	width?: number;
 }
 
+export interface WorkflowNodeExecutorAgent {
+	id: string;
+	role?: string;
+	responsibilities?: string[];
+	canDecideCompletion?: boolean;
+}
+
+export interface WorkflowNodeExecutorProtocol {
+	mode?: "managed-routing" | string;
+	broadcast?: boolean;
+	sharedArtifactsDir?: string;
+	rule?: string;
+}
+
+export interface WorkflowNodeExecutorPhase {
+	id: string;
+	agent: string;
+	goal?: string;
+	prompt?: string;
+	triggeredBy?: string;
+	inputs?: string[];
+	outputs?: string[];
+}
+
 export interface WorkflowNodeExecutor {
-	kind?: "agent" | "command" | "manual" | string;
+	kind?: "agent" | "multi-agent" | "command" | "manual" | string;
 	prompt?: string;
 	command?: string;
 	model?: string;
 	timeoutSec?: number;
 	tools?: string[];
+	coordinator?: string;
+	agents?: WorkflowNodeExecutorAgent[];
+	protocol?: WorkflowNodeExecutorProtocol;
+	phases?: WorkflowNodeExecutorPhase[];
 }
 
 export interface WorkflowNodeCompletionPolicy {

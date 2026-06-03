@@ -1,13 +1,14 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowRun } from "./types";
+import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeExecutorPhase, WorkflowRun } from "./types";
 import {
 	buildNodePrompt,
 	checkNodeCompletion,
 	listRuns,
 	loadRun,
 	refreshReadyStates,
+	resolveNodeInputs,
 	resolveRunPath,
 	runPiPrint,
 	saveRun,
@@ -338,19 +339,15 @@ async function executeOneNode(ctx: ExtensionCommandContext, runPath: string, wor
 	const runDir = dirname(runPath);
 	const nodeDir = join(runDir, "nodes", node.id);
 	mkdirSync(nodeDir, { recursive: true });
-	const prompt = buildNodePrompt(ctx.cwd, workflow, run, node, runDir, nodeDir);
-	writeFileSync(join(nodeDir, "prompt.md"), prompt, "utf-8");
 
 	await updateRunSerialized(runPath, (latest) => {
 		latest.nodes[node.id] = { ...latest.nodes[node.id], status: "running", startedAt: new Date().toISOString() };
 		latest.status = "running";
 	});
 
-	const result = await runPiPrint(ctx.cwd, prompt, signal, {
-		eventLogPath: join(nodeDir, "events.jsonl"),
-		transcriptPath: join(nodeDir, "agent-output.md"),
-	});
-	writeFileSync(join(nodeDir, "agent-output.md"), result.output, "utf-8");
+	const result = node.executor?.kind === "multi-agent"
+		? await executeMultiAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal)
+		: await executeSingleAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal);
 
 	run = loadRun(runPath);
 	const wasAborted = signal?.aborted || run.status === "aborted";
@@ -393,6 +390,93 @@ async function executeOneNode(ctx: ExtensionCommandContext, runPath: string, wor
 	});
 }
 
+async function executeSingleAgentNode(
+	ctx: ExtensionCommandContext,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	runDir: string,
+	nodeDir: string,
+	signal?: AbortSignal,
+): Promise<{ exitCode: number; output: string }> {
+	const prompt = buildNodePrompt(ctx.cwd, workflow, run, node, runDir, nodeDir);
+	writeFileSync(join(nodeDir, "prompt.md"), prompt, "utf-8");
+	const result = await runPiPrint(ctx.cwd, prompt, signal, {
+		eventLogPath: join(nodeDir, "events.jsonl"),
+		transcriptPath: join(nodeDir, "agent-output.md"),
+	});
+	writeFileSync(join(nodeDir, "agent-output.md"), result.output, "utf-8");
+	return result;
+}
+
+async function executeMultiAgentNode(
+	ctx: ExtensionCommandContext,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	runDir: string,
+	nodeDir: string,
+	signal?: AbortSignal,
+): Promise<{ exitCode: number; output: string }> {
+	const executor = node.executor;
+	const phases = executor?.phases ?? [];
+	if (phases.length === 0) return { exitCode: 1, output: "multi-agent executor requires phases" };
+
+	mkdirSync(join(nodeDir, "shared"), { recursive: true });
+	mkdirSync(join(nodeDir, "agents"), { recursive: true });
+	mkdirSync(join(nodeDir, "messages"), { recursive: true });
+	writeFileSync(join(nodeDir, "prompt.md"), buildNodePrompt(ctx.cwd, workflow, run, node, runDir, nodeDir), "utf-8");
+
+	const phaseSummaries: string[] = [];
+	for (const phase of phases) {
+		if (signal?.aborted) return { exitCode: 130, output: phaseSummaries.join("\n\n") };
+		const phaseDir = join(nodeDir, "agents", phase.id);
+		mkdirSync(phaseDir, { recursive: true });
+		const prompt = buildMultiAgentPhasePrompt(ctx.cwd, workflow, run, node, phase, runDir, nodeDir);
+		writeFileSync(join(phaseDir, "prompt.md"), prompt, "utf-8");
+		const result = await runPiPrint(ctx.cwd, prompt, signal, {
+			eventLogPath: join(phaseDir, "events.jsonl"),
+			transcriptPath: join(phaseDir, "agent-output.md"),
+		});
+		writeFileSync(join(phaseDir, "agent-output.md"), result.output, "utf-8");
+		phaseSummaries.push(`## Phase: ${phase.id}\n\nAgent: ${phase.agent}\nExit: ${result.exitCode}\n\nTranscript: ${relative(ctx.cwd, join(phaseDir, "agent-output.md"))}`);
+		if (result.exitCode !== 0) {
+			const output = phaseSummaries.join("\n\n");
+			writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+			return { exitCode: result.exitCode, output };
+		}
+	}
+
+	const output = phaseSummaries.join("\n\n");
+	writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+	return { exitCode: 0, output };
+}
+
+function buildMultiAgentPhasePrompt(
+	cwd: string,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	phase: WorkflowNodeExecutorPhase,
+	runDir: string,
+	nodeDir: string,
+): string {
+	const executor = node.executor;
+	const agents = executor?.agents ?? [];
+	const agent = agents.find((item) => item.id === phase.agent);
+	const sharedDir = executor?.protocol?.sharedArtifactsDir ?? "shared";
+	const nodeInputs = resolveNodeInputs(cwd, node, run, runDir);
+	const phaseInputs = (phase.inputs ?? []).map((input) => resolveMultiAgentPhasePath(cwd, run, nodeDir, input));
+	return `# Multi-Agent Workflow Node Phase\n\nYou are executing one real Pi sub-agent phase inside a multi-agent workflow node.\n\nThis is not a broadcast chat. Only do the work assigned to your phase. Communicate by writing explicit artifacts/messages.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Phase\n\nID: ${phase.id}\nAgent: ${phase.agent}\nRole: ${agent?.role ?? phase.agent}\nGoal: ${phase.goal ?? phase.prompt ?? "Complete this phase."}\nPrompt: ${phase.prompt ?? phase.goal ?? "Complete this phase."}\nTriggered by: ${phase.triggeredBy ?? "workflow engine"}\n\n## Agent Responsibilities\n\n${(agent?.responsibilities ?? []).map((item) => `- ${item}`).join("\n") || "- Follow the phase prompt."}\n\n## Protocol\n\n- Coordinator: ${executor?.coordinator ?? "manager"}\n- Mode: ${executor?.protocol?.mode ?? "managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Agents do not respond unless explicitly assigned a task by the coordinator."}\n- Shared artifacts directory: ${relative(cwd, join(nodeDir, sharedDir))}\n- Messages directory: ${relative(cwd, join(nodeDir, "messages"))}\n\n## Available Inputs\n\n${[...nodeInputs, ...phaseInputs].map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Phase Outputs\n\n${(phase.outputs ?? []).map((output) => `- ${relative(cwd, join(nodeDir, output))}`).join("\n") || "- Write useful phase artifacts under shared/ or messages/."}\n\n## Finalization Rule\n\nOnly the coordinator/finalize phase should write the parent node's result.json and report.md. If this phase is not finalization, do not mark the parent node complete.\n\nParent node final required outputs:\n${(node.outputs ?? ["result.json", "report.md"]).map((output) => `- ${relative(cwd, join(nodeDir, output))}`).join("\n")}\n\n## Important\n\n- Do not modify workflow topology or run.json.\n- Do not broadcast requests to all agents. Address messages to a specific next agent/coordinator.\n- If you need to pass work to another agent, write a JSONL message in messages/ with from/to/type/artifact/summary.\n- Keep artifacts concise and actionable.\n`;
+}
+
+function resolveMultiAgentPhasePath(cwd: string, run: WorkflowRun, nodeDir: string, value: string): string {
+	let resolved = value.replace(/\{\{inputs\.spec\}\}/g, run.inputs.spec);
+	if (resolved.includes("{{")) return resolved;
+	if (isAbsolute(resolved)) return resolved;
+	if (resolved.startsWith(".workflow/") || resolved.startsWith("specs/") || resolved.startsWith("docs/") || resolved.startsWith("requirements/")) return resolved;
+	return relative(cwd, join(nodeDir, resolved));
+}
 
 async function abortWorkflowRun(args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {
 	if (!ctx.hasUI) return ctx.ui.notify("workflow:abort requires interactive mode", "error");
