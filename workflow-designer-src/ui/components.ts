@@ -4,6 +4,7 @@ import { dirname, join, relative } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeLayout, WorkflowRun, WorkflowRunNodeState } from "../types";
+import { loadWorkflow, resolveWorkflowFilePath } from "../workflow";
 import { bottomBorder, clamp, isEnter, matchesKey, pad, padAnsi, sideLine, topBorder, truncateToWidth } from "./common";
 import { centerLayout, computeLayout, computeRanks, createCanvas, drawEdges, drawNode, nodeHeight } from "./graph";
 
@@ -197,6 +198,7 @@ export class RunDetailComponent {
 		const promptPath = join(nodeDir, "prompt.md");
 		const agentOutputPath = join(nodeDir, "agent-output.md");
 		const verificationPath = join(nodeDir, "verification.json");
+		const workflowNode = this.workflowNode(nodeId);
 		const lines = [
 			`Node: ${nodeId}`,
 			`Status: ${state.status}`,
@@ -215,6 +217,18 @@ export class RunDetailComponent {
 			"Declared outputs:",
 			...(state.outputs ?? []).map((output) => `- ${output}`),
 		];
+		if (workflowNode?.executor?.kind === "multi-agent") {
+			lines.push("", `Multi-agent cluster: ${workflowNode.executor.agents?.length ?? 0} agents`);
+			for (const agent of workflowNode.executor.agents ?? []) lines.push(`- ${agent.id}${agent.role ? ` (${agent.role})` : ""}`);
+			lines.push("", `Internal phases: ${workflowNode.executor.phases?.length ?? 0}`);
+			for (const phase of workflowNode.executor.phases ?? []) {
+				const phaseDir = join(nodeDir, "agents", phase.id);
+				const phaseOutput = join(phaseDir, "agent-output.md");
+				const phaseEvents = join(phaseDir, "events.jsonl");
+				const marker = existsSync(phaseOutput) ? "output" : existsSync(phaseEvents) ? "events" : "pending";
+				lines.push(`- ${phase.id} -> ${phase.agent} [${marker}]`);
+			}
+		}
 		if (existsSync(verificationPath)) {
 			lines.push("", "verification.json:");
 			try {
@@ -234,6 +248,15 @@ export class RunDetailComponent {
 			}
 		}
 		return lines.map((line) => truncateToWidth(line, width - 1, "..."));
+	}
+
+	private workflowNode(nodeId: string): WorkflowNode | undefined {
+		try {
+			const workflow = loadWorkflow(resolveWorkflowFilePath(this.cwd, this.run.workflowFile));
+			return workflow.nodes.find((node) => node.id === nodeId);
+		} catch {
+			return undefined;
+		}
 	}
 
 	invalidate(): void {}
