@@ -471,22 +471,18 @@ async function inspectWorkflowRun(args: string | undefined, ctx: ExtensionComman
 		overlayOptions: { anchor: "center", width: "88%", maxHeight: "88%", margin: 2 },
 	});
 	if (result?.action === "retry") {
-		await retryOrResumeWorkflowRun(runPath, ctx.cwd, result.nodeId);
+		await retryOrResumeWorkflowRun(runPath, ctx.cwd);
 		ctx.ui.notify(`Retry/resume scheduled for ${relative(ctx.cwd, runPath)}.`, "info");
 		await startWorkflowRun(runPath, ctx);
 	}
 }
 
-async function retryOrResumeWorkflowRun(runPath: string, cwd: string, selectedNodeId: string | undefined): Promise<void> {
+async function retryOrResumeWorkflowRun(runPath: string, cwd: string): Promise<void> {
 	await updateRunSerialized(runPath, (run) => {
 		const workflow = loadWorkflow(resolveWorkflowFilePath(cwd, run.workflowFile));
 		const runDir = dirname(runPath);
 		const retryable = new Set(["failed", "needs-revision", "running"]);
-		const selectedState = selectedNodeId ? run.nodes[selectedNodeId] : undefined;
-		const seeds = selectedNodeId && selectedState && retryable.has(selectedState.status)
-			? [selectedNodeId]
-			: Object.entries(run.nodes).filter(([, state]) => retryable.has(state.status)).map(([id]) => id);
-		if (seeds.length === 0 && selectedNodeId && run.nodes[selectedNodeId]?.status !== "completed") seeds.push(selectedNodeId);
+		const seeds = Object.entries(run.nodes).filter(([, state]) => retryable.has(state.status)).map(([id]) => id);
 		const affected = collectDescendants(workflow, seeds);
 		for (const nodeId of affected) {
 			const state = run.nodes[nodeId];

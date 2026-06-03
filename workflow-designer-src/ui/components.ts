@@ -100,8 +100,7 @@ export class RunDetailComponent {
 		} else if (data === "Q" || data === "q") {
 			this.openSelectedConversationFile();
 		} else if (data === "R" || data === "r") {
-			const nodeId = Object.keys(this.run.nodes)[this.selected];
-			if (nodeId) this.done({ action: "retry", nodeId });
+			this.done({ action: "retry" });
 		}
 		this.tui.requestRender();
 	}
@@ -142,7 +141,7 @@ export class RunDetailComponent {
 
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 		const msg = this.message ? ` | ${this.message}` : "";
-		lines.push(sideLine(pad(` up/down select   |   left/right scroll   |   v view:${this.view}   |   Q open   |   R retry/resume   |   Esc close${msg}`, innerW), th));
+		lines.push(sideLine(pad(` up/down select   |   left/right scroll   |   v view:${this.view}   |   Q open   |   R resume run   |   Esc close${msg}`, innerW), th));
 		lines.push(bottomBorder(innerW, th));
 		return lines.map((line) => truncateToWidth(line, outerW, "", true));
 	}
