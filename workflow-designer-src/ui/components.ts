@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeLayout, WorkflowRun, WorkflowRunNodeState } from "../types";
-import { bottomBorder, clamp, isEnter, matchesKey, pad, padAnsi, padRight, sideLine, topBorder, truncateToWidth } from "./common";
+import { bottomBorder, clamp, isEnter, matchesKey, pad, padAnsi, sideLine, topBorder, truncateToWidth } from "./common";
 import { centerLayout, computeLayout, computeRanks, createCanvas, drawEdges, drawNode } from "./graph";
 
 export class RunListComponent {
@@ -589,11 +589,12 @@ export class WorkflowDesignerComponent {
 }
 
 export class NodeEditorComponent {
-	private draft: WorkflowNode;
-	private selected = 0;
-	private editing = false;
-	private editBuffer = "";
-	private fields: FieldDef[];
+	private originalId: string;
+	private lines: string[];
+	private cursorLine = 0;
+	private cursorCol = 0;
+	private scroll = 0;
+	private error = "";
 
 	constructor(
 		private tui: TUI,
@@ -601,148 +602,116 @@ export class NodeEditorComponent {
 		node: WorkflowNode,
 		private done: (result: EditResult) => void,
 	) {
-		this.draft = JSON.parse(JSON.stringify(node)) as WorkflowNode;
-		this.fields = [
-			{ key: "id", label: "id", type: "readonly", section: "Basic" },
-			{ key: "title", label: "title", type: "string", section: "Basic" },
-			{ key: "type", label: "type", type: "string", section: "Basic" },
-			{ key: "goal", label: "goal", type: "string", section: "Goal-driven Execution" },
-			{ key: "prompt", label: "prompt", type: "string", section: "Goal-driven Execution" },
-			{ key: "references", label: "references", type: "list", section: "Goal-driven Execution" },
-			{ key: "requiresApproval", label: "requiresApproval", type: "boolean", section: "Gate" },
-			{ key: "status", label: "status", type: "string", section: "Runtime Preview" },
-			{ key: "inputs", label: "inputs", type: "list", section: "Inputs / Outputs" },
-			{ key: "outputs", label: "outputs", type: "list", section: "Inputs / Outputs" },
-			{ key: "skill", label: "skill (compat)", type: "string", section: "Compatibility" },
-			{ key: "description", label: "description (compat)", type: "string", section: "Compatibility" },
-		];
+		this.originalId = node.id;
+		this.lines = JSON.stringify(node, null, "\t").split("\n");
 	}
 
 	handleInput(data: string): void {
-		if (this.editing) {
-			this.handleEditInput(data);
-			return;
-		}
-
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.done({ action: "cancel" });
 			return;
 		}
 		if (matchesKey(data, "ctrl+s")) {
-			this.done({ action: "save", node: this.draft });
+			this.saveJson();
 			return;
 		}
-		if (matchesKey(data, "up")) this.selected = Math.max(0, this.selected - 1);
-		else if (matchesKey(data, "down")) this.selected = Math.min(this.fields.length - 1, this.selected + 1);
-		else if (matchesKey(data, "tab")) this.selected = (this.selected + 1) % this.fields.length;
-		else if (isEnter(data) || matchesKey(data, "space")) this.startEditingOrToggle();
+		if (matchesKey(data, "up")) this.moveCursor(-1, 0);
+		else if (matchesKey(data, "down")) this.moveCursor(1, 0);
+		else if (matchesKey(data, "left")) this.moveCursor(0, -1);
+		else if (matchesKey(data, "right")) this.moveCursor(0, 1);
+		else if (matchesKey(data, "backspace")) this.backspace();
+		else if (isEnter(data)) this.insertText("\n");
+		else if (data.length > 0 && !data.startsWith("\u001b")) this.insertText(data);
 		this.tui.requestRender();
 	}
 
 	render(width: number): string[] {
-		const outerW = Math.max(70, width);
+		const outerW = Math.max(80, width);
 		const innerW = Math.max(1, outerW - 2);
 		const th = this.theme;
-		const lines: string[] = [];
-		lines.push(topBorder(innerW, ` Edit Node: ${this.draft.id} `, th));
+		const rendered: string[] = [];
+		const bodyH = 24;
+		this.scroll = clamp(this.scroll, 0, Math.max(0, this.lines.length - bodyH));
+		if (this.cursorLine < this.scroll) this.scroll = this.cursorLine;
+		if (this.cursorLine >= this.scroll + bodyH) this.scroll = this.cursorLine - bodyH + 1;
 
-		let lastSection = "";
-		for (let i = 0; i < this.fields.length; i++) {
-			const field = this.fields[i]!;
-			if (field.section !== lastSection) {
-				if (lastSection) lines.push(sideLine(pad("", innerW), th));
-				lines.push(sideLine(pad(` ${field.section}`, innerW), th));
-				lines.push(sideLine(pad(` ${"-".repeat(Math.min(42, innerW - 2))}`, innerW), th));
-				lastSection = field.section;
+		rendered.push(topBorder(innerW, ` Edit Node JSON: ${this.originalId} `, th));
+		rendered.push(sideLine(pad(" Edit the full node JSON. Node id is preserved on save.", innerW), th));
+		rendered.push(sideLine("-".repeat(innerW), th, "+", "+"));
+		const gutterW = Math.max(4, String(this.lines.length).length + 1);
+		for (let i = 0; i < bodyH; i++) {
+			const index = this.scroll + i;
+			const rawLine = this.lines[index] ?? "";
+			let line = rawLine;
+			if (index === this.cursorLine) {
+				const col = clamp(this.cursorCol, 0, rawLine.length);
+				line = `${rawLine.slice(0, col)}${th.fg("accent", "▌")}${rawLine.slice(col)}`;
 			}
-
-			const selected = i === this.selected;
-			const cursor = selected ? th.fg("accent", ">") : " ";
-			const label = padRight(field.label, 20);
-			let value = formatFieldValue(this.draft, field);
-			if (selected && this.editing) value = `${this.editBuffer}|`;
-			const ro = field.type === "readonly" ? th.fg("dim", " readonly") : "";
-			const raw = ` ${cursor} ${label} ${value}${ro}`;
-			const line = selected ? th.fg("accent", raw) : raw;
-			lines.push(sideLine(padAnsi(line, innerW), th));
+			const gutter = index < this.lines.length ? `${String(index + 1).padStart(gutterW - 1, " ")} ` : " ".repeat(gutterW);
+			rendered.push(sideLine(padAnsi(th.fg("dim", gutter) + truncateToWidth(line, innerW - gutterW, "..."), innerW), th));
 		}
-
-		lines.push(sideLine(pad("", innerW), th));
-		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
-		const hint = this.editing
-			? " editing: type value   |   Enter commit   |   Esc discard field edit"
-			: " updown select field   |   Enter edit/toggle   |   Ctrl+S save   |   Esc cancel";
-		lines.push(sideLine(pad(hint, innerW), th));
-		lines.push(bottomBorder(innerW, th));
-		return lines.map((line) => truncateToWidth(line, outerW, "", true));
+		rendered.push(sideLine("-".repeat(innerW), th, "+", "+"));
+		const error = this.error ? ` | ${this.error}` : "";
+		rendered.push(sideLine(pad(` arrows move   |   type edit   |   Ctrl+S save   |   Esc cancel${error}`, innerW), th));
+		rendered.push(bottomBorder(innerW, th));
+		return rendered.map((line) => truncateToWidth(line, outerW, "", true));
 	}
 
 	invalidate(): void {}
 
-	private startEditingOrToggle(): void {
-		const field = this.fields[this.selected];
-		if (!field || field.type === "readonly") return;
-		if (field.type === "boolean") {
-			(this.draft as Record<string, unknown>)[field.key] = !(this.draft as Record<string, unknown>)[field.key];
-			return;
-		}
-		this.editing = true;
-		this.editBuffer = rawFieldValue(this.draft, field);
+	private moveCursor(lineDelta: number, colDelta: number): void {
+		this.cursorLine = clamp(this.cursorLine + lineDelta, 0, Math.max(0, this.lines.length - 1));
+		this.cursorCol = clamp(this.cursorCol + colDelta, 0, this.lines[this.cursorLine]?.length ?? 0);
 	}
 
-	private handleEditInput(data: string): void {
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-			this.editing = false;
-			this.editBuffer = "";
-			this.tui.requestRender();
-			return;
+	private insertText(text: string): void {
+		this.error = "";
+		for (const ch of text) {
+			if (ch === "\r") continue;
+			if (ch === "\n") {
+				const current = this.lines[this.cursorLine] ?? "";
+				const before = current.slice(0, this.cursorCol);
+				const after = current.slice(this.cursorCol);
+				this.lines[this.cursorLine] = before;
+				this.lines.splice(this.cursorLine + 1, 0, after);
+				this.cursorLine++;
+				this.cursorCol = 0;
+			} else if (ch.charCodeAt(0) >= 32) {
+				const current = this.lines[this.cursorLine] ?? "";
+				this.lines[this.cursorLine] = `${current.slice(0, this.cursorCol)}${ch}${current.slice(this.cursorCol)}`;
+				this.cursorCol++;
+			}
 		}
-		if (isEnter(data)) {
-			const field = this.fields[this.selected];
-			if (field) commitFieldValue(this.draft, field, this.editBuffer);
-			this.editing = false;
-			this.editBuffer = "";
-			this.tui.requestRender();
-			return;
-		}
-		if (matchesKey(data, "backspace")) {
-			this.editBuffer = this.editBuffer.slice(0, -1);
-		} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			this.editBuffer += data;
-		}
-		this.tui.requestRender();
 	}
-}
 
-interface FieldDef {
-	key: keyof WorkflowNode;
-	label: string;
-	type: "readonly" | "string" | "boolean" | "list";
-	section: string;
-}
+	private backspace(): void {
+		this.error = "";
+		if (this.cursorCol > 0) {
+			const current = this.lines[this.cursorLine] ?? "";
+			this.lines[this.cursorLine] = `${current.slice(0, this.cursorCol - 1)}${current.slice(this.cursorCol)}`;
+			this.cursorCol--;
+			return;
+		}
+		if (this.cursorLine > 0) {
+			const previous = this.lines[this.cursorLine - 1] ?? "";
+			const current = this.lines[this.cursorLine] ?? "";
+			this.cursorCol = previous.length;
+			this.lines[this.cursorLine - 1] = previous + current;
+			this.lines.splice(this.cursorLine, 1);
+			this.cursorLine--;
+		}
+	}
 
-export function rawFieldValue(node: WorkflowNode, field: FieldDef): string {
-	const value = node[field.key];
-	if (Array.isArray(value)) return value.join(", ");
-	if (typeof value === "boolean") return String(value);
-	if (typeof value === "string") return value;
-	return "";
-}
-
-export function formatFieldValue(node: WorkflowNode, field: FieldDef): string {
-	const raw = rawFieldValue(node, field);
-	return raw.length > 0 ? raw : "(empty)";
-}
-
-export function commitFieldValue(node: WorkflowNode, field: FieldDef, value: string): void {
-	const target = node as Record<string, unknown>;
-	if (field.type === "list") {
-		target[field.key] = value
-			.split(",")
-			.map((v) => v.trim())
-			.filter(Boolean);
-	} else if (field.type === "string") {
-		target[field.key] = value;
+	private saveJson(): void {
+		try {
+			const parsed = JSON.parse(this.lines.join("\n")) as WorkflowNode;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("JSON must be an object");
+			parsed.id = this.originalId;
+			this.done({ action: "save", node: parsed });
+		} catch (err) {
+			this.error = `JSON error: ${err instanceof Error ? err.message : String(err)}`;
+			this.tui.requestRender();
+		}
 	}
 }
 
