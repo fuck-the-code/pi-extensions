@@ -1,0 +1,377 @@
+{
+	"version": 1,
+	"name": "review-remediation",
+	"description": "Turn a code review report into prioritized remediation work: triage findings, implement correctness fixes, harden safety boundaries, add lifecycle tests, and produce a final audit report.",
+	"inputs": {
+		"spec": {
+			"type": "file",
+			"required": true,
+			"template": "review-remediation-spec-v1",
+			"validation": {
+				"requiredSections": [
+					"Review Findings",
+					"Remediation Goal",
+					"Target Files",
+					"Priority Plan",
+					"Acceptance Criteria",
+					"Safety Constraints",
+					"Validation / Tests"
+				],
+				"forbiddenPlaceholders": [
+					"TODO",
+					"TBD",
+					"<fill me>"
+				]
+			}
+		}
+	},
+	"nodes": [
+		{
+			"id": "findings-triage",
+			"title": "Findings Triage",
+			"type": "analysis",
+			"goal": "Convert the review report into a concrete, prioritized remediation backlog with scope boundaries.",
+			"inputs": [
+				"{{inputs.spec}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the remediation spec and extract a prioritized implementation backlog. Group findings into correctness, security/safety, tests, and refactor/debt. Identify dependencies, files likely affected, what should be done now versus deferred, and risks of each change. Do not implement yet. Produce report.md with a concise remediation plan and result.json with status completed.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": true,
+				"findingsAreSuccess": false,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses the review findings from the spec",
+					"Produces a prioritized remediation backlog",
+					"Separates must-fix correctness/security issues from deferred refactors",
+					"Identifies affected files and dependencies"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 4,
+				"y": 8,
+				"width": 36
+			}
+		},
+		{
+			"id": "correctness-remediation",
+			"title": "Correctness Remediation",
+			"type": "implementation",
+			"goal": "Implement the highest-priority workflow correctness fixes from the review report.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.findings-triage.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "multi-agent",
+				"coordinator": "implementation-manager",
+				"protocol": {
+					"mode": "managed-routing",
+					"broadcast": false,
+					"sharedArtifactsDir": "shared",
+					"rule": "The implementation-manager scopes the fix, developer edits only assigned files, tester validates behavior. Agents communicate through directed messages and shared artifacts only."
+				},
+				"agents": [
+					{
+						"id": "implementation-manager",
+						"role": "Remediation coordinator",
+						"responsibilities": [
+							"Select correctness fixes that must be implemented first",
+							"Constrain edit scope",
+							"Route tasks to developer and tester",
+							"Own final node result.json and report.md"
+						],
+						"canDecideCompletion": true
+					},
+					{
+						"id": "developer",
+						"role": "Implementation developer",
+						"responsibilities": [
+							"Implement assigned correctness fixes",
+							"Keep changes minimal and localized",
+							"Document changed files and rationale"
+						]
+					},
+					{
+						"id": "tester",
+						"role": "Correctness tester",
+						"responsibilities": [
+							"Validate that implemented fixes address acceptance criteria",
+							"Run or recommend deterministic checks",
+							"Report regressions and missing tests"
+						]
+					}
+				],
+				"phases": [
+					{
+						"id": "manager-scope",
+						"agent": "implementation-manager",
+						"goal": "Scope correctness remediation work and assign a focused implementation task.",
+						"prompt": "Read the spec and findings triage report. Write shared/correctness-plan.md selecting the correctness fixes to implement now. Prioritize preserving semantic verifier failures, enforcing multi-agent phase outputs, run ID uniqueness, and pre-prompt artifact path validation. Write messages/manager-to-developer.jsonl with a precise task and file scope.",
+						"inputs": [
+							"{{inputs.spec}}",
+							"{{nodes.findings-triage.outputs.report}}"
+						],
+						"outputs": [
+							"shared/correctness-plan.md",
+							"messages/manager-to-developer.jsonl"
+						]
+					},
+					{
+						"id": "developer-fix",
+						"agent": "developer",
+						"goal": "Implement the assigned correctness remediation changes.",
+						"prompt": "Read shared/correctness-plan.md and messages/manager-to-developer.jsonl. Implement only the assigned correctness fixes. Keep edits minimal. Write shared/correctness-implementation.md with changed files, behavior changes, and risks. Write messages/developer-to-manager.jsonl.",
+						"inputs": [
+							"shared/correctness-plan.md",
+							"messages/manager-to-developer.jsonl"
+						],
+						"outputs": [
+							"shared/correctness-implementation.md",
+							"messages/developer-to-manager.jsonl"
+						]
+					},
+					{
+						"id": "tester-check",
+						"agent": "tester",
+						"goal": "Validate the correctness remediation against acceptance criteria.",
+						"prompt": "Read the spec, shared/correctness-plan.md, and shared/correctness-implementation.md. Run available validation commands if safe. Inspect changed files. Write shared/correctness-test-report.md with pass/fail observations, missing tests, and recommended follow-ups. Write messages/tester-to-manager.jsonl.",
+						"inputs": [
+							"{{inputs.spec}}",
+							"shared/correctness-plan.md",
+							"shared/correctness-implementation.md"
+						],
+						"outputs": [
+							"shared/correctness-test-report.md",
+							"messages/tester-to-manager.jsonl"
+						]
+					},
+					{
+						"id": "manager-finalize",
+						"agent": "implementation-manager",
+						"goal": "Summarize correctness remediation and write parent node outputs.",
+						"prompt": "Read all correctness shared artifacts and messages. Write report.md summarizing implemented fixes, changed files, validation status, and remaining risks. Write result.json with status completed if assigned correctness fixes were implemented and validation is acceptable, needs-revision if fixes are incomplete, or failed only for execution failure. Include outputs [\"report.md\", \"result.json\"].",
+						"inputs": [
+							"shared/correctness-plan.md",
+							"shared/correctness-implementation.md",
+							"shared/correctness-test-report.md",
+							"messages/developer-to-manager.jsonl",
+							"messages/tester-to-manager.jsonl"
+						],
+						"outputs": [
+							"report.md",
+							"result.json"
+						]
+					}
+				]
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": true,
+				"findingsAreSuccess": false,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Correctness fixes are scoped from the review findings",
+					"Implementation changes are concrete and localized",
+					"Validation evidence or explicit limitations are documented",
+					"Remaining correctness risks are listed"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 52,
+				"y": 8,
+				"width": 40
+			}
+		},
+		{
+			"id": "safety-hardening-plan",
+			"title": "Safety Hardening Plan",
+			"type": "analysis",
+			"goal": "Design a safe, staged plan for security and process hardening findings that are too broad for the first correctness patch.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.findings-triage.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the remediation spec and triage report. Produce a staged hardening plan for process spawning, environment allowlisting, abort/process-group termination, log sensitivity, symlink-aware containment, and trusted executable resolution. Do not perform broad risky refactors unless explicitly safe and small. Produce actionable design notes and acceptance criteria for future implementation.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": true,
+				"findingsAreSuccess": false,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers process spawning and environment risks",
+					"Covers symlink/path/log safety risks",
+					"Separates immediate safe changes from future larger work",
+					"Provides actionable acceptance criteria"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 52,
+				"y": 24,
+				"width": 40
+			}
+		},
+		{
+			"id": "lifecycle-tests",
+			"title": "Lifecycle Tests",
+			"type": "testing",
+			"goal": "Add or specify deterministic tests for workflow lifecycle correctness and multi-agent execution behavior.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.findings-triage.outputs.report}}",
+				"{{nodes.correctness-remediation.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Use the spec, triage report, and correctness remediation report. Add practical deterministic test coverage where feasible, preferably with temporary workdirs and a stub pi executable. If a full harness is too large, write a concrete test design and add the highest-value lightweight tests or script checks. Validate existing smoke test still passes. Produce report.md with tests added/run and gaps remaining.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": true,
+				"findingsAreSuccess": false,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Addresses lifecycle test gaps from the review report",
+					"Runs or documents validation commands",
+					"Documents added tests or explicit reasons tests were deferred",
+					"Captures remaining test gaps"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 104,
+				"y": 8,
+				"width": 38
+			}
+		},
+		{
+			"id": "final-audit",
+			"title": "Final Audit",
+			"type": "synthesis",
+			"goal": "Verify the remediation work against the original review findings and produce a final handoff report.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.findings-triage.outputs.report}}",
+				"{{nodes.correctness-remediation.outputs.report}}",
+				"{{nodes.safety-hardening-plan.outputs.report}}",
+				"{{nodes.lifecycle-tests.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Produce a final remediation audit report. Compare completed work against the original review findings and acceptance criteria. Include what was fixed, what remains, validation evidence, risks, and recommended next workflow/spec for remaining hardening work. Do not hide unresolved major issues.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Compares remediation work against original review findings",
+					"Includes validation evidence",
+					"Clearly lists unresolved risks and next actions",
+					"Does not claim broad production readiness without evidence"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 154,
+				"y": 16,
+				"width": 38
+			}
+		}
+	],
+	"edges": [
+		{
+			"from": "findings-triage",
+			"to": "correctness-remediation"
+		},
+		{
+			"from": "findings-triage",
+			"to": "safety-hardening-plan"
+		},
+		{
+			"from": "correctness-remediation",
+			"to": "lifecycle-tests"
+		},
+		{
+			"from": "correctness-remediation",
+			"to": "final-audit"
+		},
+		{
+			"from": "safety-hardening-plan",
+			"to": "final-audit"
+		},
+		{
+			"from": "lifecycle-tests",
+			"to": "final-audit"
+		}
+	]
+}
