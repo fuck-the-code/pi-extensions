@@ -4,12 +4,40 @@ export interface WorkflowNodeLayout {
 	width?: number;
 }
 
+export interface WorkflowNodeExecutor {
+	kind?: "agent" | "command" | "manual" | string;
+	prompt?: string;
+	command?: string;
+	model?: string;
+	timeoutSec?: number;
+	tools?: string[];
+}
+
+export interface WorkflowNodeCompletionPolicy {
+	artifactCheck?: boolean;
+	semanticVerification?: boolean;
+	needsRevisionBlocks?: boolean;
+	findingsAreSuccess?: boolean;
+	failedBlocks?: boolean;
+}
+
+export interface WorkflowNodeVerification {
+	enabled?: boolean;
+	mode?: "semantic" | string;
+	criteria?: string[];
+	goal?: string;
+	output?: { path?: string };
+}
+
 export interface WorkflowNode {
 	id: string;
 	title?: string;
 	type?: string;
 	goal?: string;
 	prompt?: string;
+	executor?: WorkflowNodeExecutor;
+	completionPolicy?: WorkflowNodeCompletionPolicy;
+	verification?: WorkflowNodeVerification;
 	references?: string[];
 	// Deprecated/compat: older workflow files may still use skill/description.
 	skill?: string;

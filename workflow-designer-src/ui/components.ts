@@ -1,10 +1,11 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeLayout, WorkflowRun, WorkflowRunNodeState } from "../types";
 import { bottomBorder, clamp, isEnter, matchesKey, pad, padAnsi, padRight, sideLine, topBorder, truncateToWidth } from "./common";
-import { centerLayout, computeLayout, createCanvas, drawEdges, drawNode } from "./graph";
+import { centerLayout, computeLayout, computeRanks, createCanvas, drawEdges, drawNode } from "./graph";
 
 export class RunListComponent {
 	private selected = 0;
@@ -68,6 +69,9 @@ export class RunListComponent {
 export class RunDetailComponent {
 	private selected = 0;
 	private scroll = 0;
+	private view: "details" | "conversation" = "details";
+	private refreshTimer: ReturnType<typeof setInterval> | undefined;
+	private message = "";
 
 	constructor(
 		private tui: TUI,
@@ -76,7 +80,9 @@ export class RunDetailComponent {
 		private runPath: string,
 		private run: WorkflowRun,
 		private done: () => void,
-	) {}
+	) {
+		this.refreshTimer = setInterval(() => this.tui.requestRender(), 1000);
+	}
 
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
@@ -88,10 +94,19 @@ export class RunDetailComponent {
 		else if (matchesKey(data, "down")) this.selected = Math.min(nodeIds.length - 1, this.selected + 1);
 		else if (matchesKey(data, "left")) this.scroll = Math.max(0, this.scroll - 1);
 		else if (matchesKey(data, "right")) this.scroll++;
+		else if (matchesKey(data, "v")) {
+			this.view = this.view === "details" ? "conversation" : "details";
+			this.scroll = 0;
+		} else if (data === "Q" || data === "q") {
+			this.openSelectedConversationFile();
+		}
 		this.tui.requestRender();
 	}
 
 	render(width: number): string[] {
+		try {
+			this.run = JSON.parse(readFileSync(this.runPath, "utf-8")) as WorkflowRun;
+		} catch {}
 		const outerW = Math.max(90, width);
 		const innerW = Math.max(1, outerW - 2);
 		const th = this.theme;
@@ -108,7 +123,7 @@ export class RunDetailComponent {
 		lines.push(sideLine(pad(` Spec: ${this.run.inputs.spec} | Original: ${this.run.originalInputs.spec ?? ""}`, innerW), th));
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 
-		const detailLines = selectedNodeId && selectedState ? this.nodeDetailLines(selectedNodeId, selectedState, rightW) : ["No node selected"];
+		const detailLines = selectedNodeId && selectedState ? this.nodeViewLines(selectedNodeId, selectedState, rightW) : ["No node selected"];
 		this.scroll = clamp(this.scroll, 0, Math.max(0, detailLines.length - bodyH));
 		for (let i = 0; i < bodyH; i++) {
 			const nodeIndex = i;
@@ -123,9 +138,53 @@ export class RunDetailComponent {
 		}
 
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
-		lines.push(sideLine(pad(" up/down select node   |   left/right scroll details   |   Esc close", innerW), th));
+		const msg = this.message ? ` | ${this.message}` : "";
+		lines.push(sideLine(pad(` up/down select node   |   left/right scroll   |   v view:${this.view}   |   Q open in VSCode   |   Esc close${msg}`, innerW), th));
 		lines.push(bottomBorder(innerW, th));
 		return lines.map((line) => truncateToWidth(line, outerW, "", true));
+	}
+
+	private openSelectedConversationFile(): void {
+		const nodeId = Object.keys(this.run.nodes)[this.selected];
+		if (!nodeId) return;
+		const runDir = dirname(this.runPath);
+		const transcriptPath = join(runDir, "nodes", nodeId, "agent-output.md");
+		const eventsPath = join(runDir, "nodes", nodeId, "events.jsonl");
+		const target = existsSync(transcriptPath) ? transcriptPath : existsSync(eventsPath) ? eventsPath : undefined;
+		if (!target) {
+			this.message = `no conversation file for ${nodeId}`;
+			return;
+		}
+		try {
+			const child = spawn("code", [target], { detached: true, stdio: "ignore" });
+			child.unref();
+			this.message = `opened ${relative(this.cwd, target)}`;
+		} catch (err) {
+			this.message = `failed to open code: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	private nodeViewLines(nodeId: string, state: WorkflowRunNodeState, width: number): string[] {
+		if (this.view === "conversation") return this.nodeConversationLines(nodeId, width);
+		return this.nodeDetailLines(nodeId, state, width);
+	}
+
+	private nodeConversationLines(nodeId: string, width: number): string[] {
+		const runDir = dirname(this.runPath);
+		const transcriptPath = join(runDir, "nodes", nodeId, "agent-output.md");
+		const eventsPath = join(runDir, "nodes", nodeId, "events.jsonl");
+		if (!existsSync(transcriptPath)) {
+			return [
+				`Conversation view for ${nodeId}`,
+				"",
+				"No transcript yet.",
+				`Expected: ${relative(this.cwd, transcriptPath)}`,
+				`Raw events: ${relative(this.cwd, eventsPath)}`,
+			];
+		}
+		const content = readFileSync(transcriptPath, "utf-8");
+		return [`Conversation view for ${nodeId}`, `Transcript: ${relative(this.cwd, transcriptPath)}`, "", ...content.split("\n")]
+			.map((line) => truncateToWidth(line, width - 1, "..."));
 	}
 
 	private nodeDetailLines(nodeId: string, state: WorkflowRunNodeState, width: number): string[] {
@@ -135,6 +194,7 @@ export class RunDetailComponent {
 		const reportPath = join(nodeDir, "report.md");
 		const promptPath = join(nodeDir, "prompt.md");
 		const agentOutputPath = join(nodeDir, "agent-output.md");
+		const verificationPath = join(nodeDir, "verification.json");
 		const lines = [
 			`Node: ${nodeId}`,
 			`Status: ${state.status}`,
@@ -146,12 +206,22 @@ export class RunDetailComponent {
 			"Files:",
 			`- ${relative(this.cwd, promptPath)} ${existsSync(promptPath) ? "(exists)" : ""}`,
 			`- ${relative(this.cwd, agentOutputPath)} ${existsSync(agentOutputPath) ? "(exists)" : ""}`,
+			`- ${relative(this.cwd, verificationPath)} ${existsSync(verificationPath) ? "(exists)" : ""}`,
 			`- ${relative(this.cwd, resultPath)} ${existsSync(resultPath) ? "(exists)" : ""}`,
 			`- ${relative(this.cwd, reportPath)} ${existsSync(reportPath) ? "(exists)" : ""}`,
 			"",
 			"Declared outputs:",
 			...(state.outputs ?? []).map((output) => `- ${output}`),
 		];
+		if (existsSync(verificationPath)) {
+			lines.push("", "verification.json:");
+			try {
+				const parsed = JSON.parse(readFileSync(verificationPath, "utf-8"));
+				lines.push(...JSON.stringify(parsed, null, 2).split("\n"));
+			} catch {
+				lines.push(...readFileSync(verificationPath, "utf-8").split("\n"));
+			}
+		}
 		if (existsSync(resultPath)) {
 			lines.push("", "result.json:");
 			try {
@@ -165,6 +235,11 @@ export class RunDetailComponent {
 	}
 
 	invalidate(): void {}
+
+	dispose(): void {
+		if (this.refreshTimer) clearInterval(this.refreshTimer);
+		this.refreshTimer = undefined;
+	}
 }
 
 export class SpecTemplatePreviewComponent {
@@ -326,6 +401,13 @@ export class WorkflowListComponent {
 export class WorkflowDesignerComponent {
 	private selectedId: string | undefined;
 	private layout: Map<string, Required<WorkflowNodeLayout>> = new Map();
+	private panX = 0;
+	private panY = 0;
+	private lastViewW = 80;
+	private lastViewH = 27;
+	private lastCanvasW = 80;
+	private lastCanvasH = 27;
+	private shouldEnsureSelectedVisible = true;
 
 	constructor(
 		private tui: TUI,
@@ -354,6 +436,10 @@ export class WorkflowDesignerComponent {
 		else if (matchesKey(data, "right")) this.selectByDirection("right");
 		else if (matchesKey(data, "up")) this.selectByDirection("up");
 		else if (matchesKey(data, "down")) this.selectByDirection("down");
+		else if (data === "a") this.panBy(-12, 0);
+		else if (data === "d") this.panBy(12, 0);
+		else if (data === "w") this.panBy(0, -5);
+		else if (data === "s") this.panBy(0, 5);
 		this.tui.requestRender();
 	}
 
@@ -362,9 +448,19 @@ export class WorkflowDesignerComponent {
 		const innerW = Math.max(1, outerW - 2);
 		const graphW = innerW;
 		const graphH = 27;
-		this.layout = centerLayout(computeLayout(this.workflow, graphW, graphH), graphW, graphH);
+		const { width: canvasW, height: canvasH } = this.virtualCanvasSize(graphW, graphH);
+		this.lastViewW = graphW;
+		this.lastViewH = graphH;
+		this.lastCanvasW = canvasW;
+		this.lastCanvasH = canvasH;
+		this.layout = centerLayout(computeLayout(this.workflow, canvasW, canvasH), canvasW, canvasH);
+		if (this.shouldEnsureSelectedVisible) {
+			this.ensureSelectedVisible();
+			this.shouldEnsureSelectedVisible = false;
+		}
+		this.clampViewport();
 
-		const canvas = createCanvas(graphW, graphH);
+		const canvas = createCanvas(canvasW, canvasH);
 		// Draw edges first, then nodes. Nodes must stay rectangular; edges should never
 		// overwrite node borders or text because that makes the graph look misaligned.
 		drawEdges(canvas, this.workflow, this.layout);
@@ -381,8 +477,10 @@ export class WorkflowDesignerComponent {
 		lines.push(sideLine(pad(` ${this.workflow.description ?? "Edges are read-only. Press Enter on a node to edit properties."}`, innerW), th));
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 
-		for (const row of canvas) {
-			lines.push(sideLine(row.join(""), th));
+		for (let y = 0; y < graphH; y++) {
+			const row = canvas[this.panY + y] ?? [];
+			const visible = row.slice(this.panX, this.panX + graphW).join("");
+			lines.push(sideLine(pad(visible, graphW), th));
 		}
 
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
@@ -391,12 +489,50 @@ export class WorkflowDesignerComponent {
 			? ` Selected: ${selected.id} | title: ${selected.title ?? ""} | goal: ${truncateToWidth(selected.goal ?? selected.description ?? "", 60, "...")}`
 			: " No node selected";
 		lines.push(sideLine(pad(summary, innerW), th));
-		lines.push(sideLine(pad(" leftupdownright select node   |   Enter edit node   |   r reload   |   Esc close", innerW), th));
+		lines.push(sideLine(pad(` arrows select/auto-pan   |   wasd pan   |   Enter edit   |   r reload   |   Esc close   |   view ${this.panX},${this.panY}`, innerW), th));
 		lines.push(bottomBorder(innerW, th));
 		return lines.map((line) => truncateToWidth(line, outerW, "", true));
 	}
 
 	invalidate(): void {}
+
+	private virtualCanvasSize(viewW: number, viewH: number): { width: number; height: number } {
+		const ranks = computeRanks(this.workflow);
+		const rankCount = Math.max(1, Math.max(0, ...Array.from(ranks.values())) + 1);
+		const nodesPerRank = new Map<number, number>();
+		for (const node of this.workflow.nodes) {
+			const rank = ranks.get(node.id) ?? 0;
+			nodesPerRank.set(rank, (nodesPerRank.get(rank) ?? 0) + 1);
+		}
+		const maxLayerNodes = Math.max(1, ...Array.from(nodesPerRank.values()));
+		return {
+			width: Math.max(viewW, rankCount * 48 + 8),
+			height: Math.max(viewH, maxLayerNodes * 8 + 4),
+		};
+	}
+
+	private panBy(dx: number, dy: number): void {
+		this.shouldEnsureSelectedVisible = false;
+		this.panX += dx;
+		this.panY += dy;
+		this.clampViewport();
+	}
+
+	private clampViewport(): void {
+		this.panX = clamp(this.panX, 0, Math.max(0, this.lastCanvasW - this.lastViewW));
+		this.panY = clamp(this.panY, 0, Math.max(0, this.lastCanvasH - this.lastViewH));
+	}
+
+	private ensureSelectedVisible(): void {
+		const box = this.selectedId ? this.layout.get(this.selectedId) : undefined;
+		if (!box) return;
+		const marginX = 4;
+		const marginY = 2;
+		if (box.x < this.panX + marginX) this.panX = Math.max(0, box.x - marginX);
+		else if (box.x + box.width > this.panX + this.lastViewW - marginX) this.panX = box.x + box.width - this.lastViewW + marginX;
+		if (box.y < this.panY + marginY) this.panY = Math.max(0, box.y - marginY);
+		else if (box.y + 5 > this.panY + this.lastViewH - marginY) this.panY = box.y + 5 - this.lastViewH + marginY;
+	}
 
 	private selectByDirection(direction: "left" | "right" | "up" | "down"): void {
 		if (!this.selectedId && this.workflow.nodes[0]) {
@@ -440,7 +576,12 @@ export class WorkflowDesignerComponent {
 				bestScore = score;
 			}
 		}
-		if (best) this.selectedId = best.id;
+		if (best) {
+			this.selectedId = best.id;
+			this.shouldEnsureSelectedVisible = true;
+			this.ensureSelectedVisible();
+			this.clampViewport();
+		}
 	}
 }
 

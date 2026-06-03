@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { WorkflowDefinition } from "./types";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import type { WorkflowDefinition, WorkflowNodeCompletionPolicy } from "./types";
 
 export function listWorkflowNames(cwd: string): string[] {
 	const dir = join(cwd, ".pi", "workflows");
@@ -12,8 +12,25 @@ export function listWorkflowNames(cwd: string): string[] {
 }
 
 export function getWorkflowPath(cwd: string, name: string): string {
-	const file = name.endsWith(".workflow.json") ? name : `${name}.workflow.json`;
-	return join(cwd, ".pi", "workflows", file);
+	const base = name.endsWith(".workflow.json") ? name.slice(0, -".workflow.json".length) : name;
+	if (!isSafeIdentifier(base)) throw new Error(`Invalid workflow name: ${name}`);
+	return join(resolve(cwd, ".pi", "workflows"), `${base}.workflow.json`);
+}
+
+export function resolveWorkflowFilePath(cwd: string, file: string): string {
+	const root = resolve(cwd, ".pi", "workflows");
+	const candidate = resolve(cwd, file);
+	if (!isInside(root, candidate)) throw new Error(`Workflow file escapes .pi/workflows: ${file}`);
+	return candidate;
+}
+
+export function isSafeIdentifier(value: string): boolean {
+	return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+export function isInside(root: string, candidate: string): boolean {
+	const rel = relative(root, candidate);
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 export function loadWorkflow(path: string): WorkflowDefinition {
@@ -21,7 +38,21 @@ export function loadWorkflow(path: string): WorkflowDefinition {
 	const parsed = JSON.parse(raw) as WorkflowDefinition;
 	if (!Array.isArray(parsed.nodes)) throw new Error("workflow.nodes must be an array");
 	if (!Array.isArray(parsed.edges)) throw new Error("workflow.edges must be an array");
+	validateWorkflowShape(parsed);
 	return normalizeWorkflow(parsed);
+}
+
+export function validateWorkflowShape(workflow: WorkflowDefinition): void {
+	const ids = new Set<string>();
+	for (const node of workflow.nodes) {
+		if (!isSafeIdentifier(node.id)) throw new Error(`Invalid node id: ${node.id}`);
+		if (ids.has(node.id)) throw new Error(`Duplicate node id: ${node.id}`);
+		ids.add(node.id);
+	}
+	for (const edge of workflow.edges) {
+		if (!ids.has(edge.from)) throw new Error(`Unknown edge source: ${edge.from}`);
+		if (!ids.has(edge.to)) throw new Error(`Unknown edge target: ${edge.to}`);
+	}
 }
 
 export function normalizeWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
@@ -38,11 +69,35 @@ export function normalizeWorkflow(workflow: WorkflowDefinition): WorkflowDefinit
 	};
 	for (const node of workflow.nodes) {
 		node.goal ??= node.description ?? (node.skill ? `Complete the ${node.skill} workflow node.` : `Complete node ${node.id}.`);
-		node.prompt ??= node.additionalPrompt ?? node.description ?? node.goal;
+		node.executor ??= { kind: "agent", prompt: node.prompt ?? node.additionalPrompt ?? node.description ?? node.goal };
+		node.executor.kind ??= "agent";
+		node.prompt ??= node.executor.prompt ?? node.additionalPrompt ?? node.description ?? node.goal;
+		node.executor.prompt ??= node.prompt;
 		node.references ??= [];
 		node.outputs ??= ["result.json", "report.md"];
+		node.completionPolicy ??= defaultCompletionPolicy(node.type);
+		node.verification ??= { enabled: node.completionPolicy.semanticVerification ?? false, mode: "semantic", criteria: [] };
 	}
 	return workflow;
+}
+
+export function defaultCompletionPolicy(type: string | undefined): WorkflowNodeCompletionPolicy {
+	if (["review", "analysis", "synthesis"].includes(type ?? "")) {
+		return {
+			artifactCheck: true,
+			semanticVerification: true,
+			needsRevisionBlocks: false,
+			findingsAreSuccess: true,
+			failedBlocks: true,
+		};
+	}
+	return {
+		artifactCheck: true,
+		semanticVerification: true,
+		needsRevisionBlocks: true,
+		findingsAreSuccess: false,
+		failedBlocks: true,
+	};
 }
 
 export function saveWorkflow(path: string, workflow: WorkflowDefinition): void {

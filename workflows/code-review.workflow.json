@@ -1,0 +1,456 @@
+{
+	"version": 1,
+	"name": "code-review",
+	"description": "Code Review / Audit workflow for reviewing code quality, security, business logic correctness, and test coverage against a review spec.",
+	"inputs": {
+		"spec": {
+			"type": "file",
+			"required": true,
+			"template": "code-review-spec-v1",
+			"validation": {
+				"requiredSections": [
+					"Review Target",
+					"Change Description",
+					"Business Goal",
+					"Existing Business Context",
+					"Scope",
+					"Out of Scope",
+					"Risk Areas",
+					"Validation / Tests"
+				],
+				"forbiddenPlaceholders": [
+					"TODO",
+					"TBD",
+					"<fill me>"
+				]
+			}
+		}
+	},
+	"nodes": [
+		{
+			"id": "scope-collection",
+			"title": "Scope Collection",
+			"type": "analysis",
+			"goal": "Identify the exact review scope from the spec and repository state.",
+			"prompt": "Read the review spec. Identify the files, directories, commits, diffs, or modules that must be reviewed. If the spec names files, inspect them. If it describes a feature/change, locate the likely impacted areas. Produce a concise review scope with included files, excluded files, related upstream/downstream modules, and high-risk areas. Do not perform full review yet; focus on scoping. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 4,
+				"y": 10,
+				"width": 34
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the review spec. Identify the files, directories, commits, diffs, or modules that must be reviewed. If the spec names files, inspect them. If it describes a feature/change, locate the likely impacted areas. Produce a concise review scope with included files, excluded files, related upstream/downstream modules, and high-risk areas. Do not perform full review yet; focus on scoping. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses the review spec",
+					"Identifies concrete review targets or explains how targets were inferred",
+					"Lists included/excluded scope",
+					"Highlights high-risk areas"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "business-context",
+			"title": "Business Context",
+			"type": "analysis",
+			"goal": "Understand the business goal, existing behavior, and relevant business rules before specialized review starts.",
+			"prompt": "Use the review spec and scope report to understand the business intent of the change. Inspect relevant existing code to summarize current behavior, business rules, state transitions, permission/role constraints, data flow, and compatibility requirements. Identify assumptions that later review nodes must verify. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.scope-collection.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 48,
+				"y": 10,
+				"width": 34
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Use the review spec and scope report to understand the business intent of the change. Inspect relevant existing code to summarize current behavior, business rules, state transitions, permission/role constraints, data flow, and compatibility requirements. Identify assumptions that later review nodes must verify. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses the spec and scope report",
+					"Summarizes existing business behavior",
+					"Identifies business rules, states, permissions, or data flows",
+					"Lists assumptions later reviewers should verify"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "code-quality-review",
+			"title": "Code Quality Review",
+			"type": "review",
+			"goal": "Review code quality, coding standards, reuse, maintainability, and implementation cleanliness.",
+			"prompt": "Review the scoped code for code quality. Focus on coding conventions, naming, readability, complexity, duplication, reuse opportunities, module boundaries, type/API design, error handling style, and maintainability. Prefer concrete findings with file paths and actionable suggestions. Do not duplicate security or business-logic findings unless they directly affect maintainability. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.scope-collection.outputs.report}}",
+				"{{nodes.business-context.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 96,
+				"y": 1,
+				"width": 36
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Review the scoped code for code quality. Focus on coding conventions, naming, readability, complexity, duplication, reuse opportunities, module boundaries, type/API design, error handling style, and maintainability. Prefer concrete findings with file paths and actionable suggestions. Do not duplicate security or business-logic findings unless they directly affect maintainability. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses scope and business context",
+					"Reviews concrete files or code paths",
+					"Covers coding standards, reuse, duplication, complexity, and maintainability",
+					"Provides actionable findings or explicitly states none were found"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "security-review",
+			"title": "Security Review",
+			"type": "review",
+			"goal": "Review the scoped code for security vulnerabilities and unsafe behavior.",
+			"prompt": "Review the scoped code for security issues. Focus on input validation, authorization/permission bypass, authentication assumptions, command injection, path traversal, SSRF, XSS, SQL/NoSQL injection, secret leakage, sensitive logging, unsafe deserialization, dependency risk, and data exposure. Produce concrete findings with severity and evidence. If no material issues are found, state what was checked. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.scope-collection.outputs.report}}",
+				"{{nodes.business-context.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 96,
+				"y": 9,
+				"width": 36
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Review the scoped code for security issues. Focus on input validation, authorization/permission bypass, authentication assumptions, command injection, path traversal, SSRF, XSS, SQL/NoSQL injection, secret leakage, sensitive logging, unsafe deserialization, dependency risk, and data exposure. Produce concrete findings with severity and evidence. If no material issues are found, state what was checked. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses scope and business context",
+					"Reviews concrete files or code paths",
+					"Covers input validation, authorization, injection, secrets/logging, and data exposure where relevant",
+					"Provides severity and evidence or explicitly states no material issues"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "business-logic-review",
+			"title": "Business Logic Review",
+			"type": "review",
+			"goal": "Verify the code achieves the stated business goal without conflicting with existing business logic.",
+			"prompt": "Review whether the scoped code actually satisfies the business goal in the spec and whether it conflicts with existing business behavior. Focus on business rules, state transitions, data consistency, permissions/roles, edge cases, backwards compatibility, user-visible behavior, and whether the implementation matches the described intent. Look for cases where code may run correctly but produce wrong business semantics. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.scope-collection.outputs.report}}",
+				"{{nodes.business-context.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 96,
+				"y": 17,
+				"width": 36
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Review whether the scoped code actually satisfies the business goal in the spec and whether it conflicts with existing business behavior. Focus on business rules, state transitions, data consistency, permissions/roles, edge cases, backwards compatibility, user-visible behavior, and whether the implementation matches the described intent. Look for cases where code may run correctly but produce wrong business semantics. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses spec, scope, and business context",
+					"Compares implementation against the business goal",
+					"Checks conflicts with existing business logic and state/permission rules",
+					"Provides concrete evidence or explicitly states no conflicts found",
+					"Treats discovered business issues as review findings, not node execution failure"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "test-review",
+			"title": "Test Review",
+			"type": "review",
+			"goal": "Review whether tests adequately cover the code change, business goal, security-sensitive behavior, and regressions.",
+			"prompt": "Review the tests related to the scoped code. Check whether important business paths, regressions, edge cases, security-sensitive cases, error paths, and integration points are covered. Identify missing tests and recommend specific test cases. If tests are absent, explain the minimum useful test plan. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.scope-collection.outputs.report}}",
+				"{{nodes.business-context.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 96,
+				"y": 25,
+				"width": 36
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Review the tests related to the scoped code. Check whether important business paths, regressions, edge cases, security-sensitive cases, error paths, and integration points are covered. Identify missing tests and recommend specific test cases. If tests are absent, explain the minimum useful test plan. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses scope and business context",
+					"Checks tests against business paths, edge cases, regressions, and security-sensitive behavior",
+					"Identifies missing tests as actionable recommendations",
+					"Does not treat missing tests as node execution failure"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "risk-ranking",
+			"title": "Risk Ranking",
+			"type": "synthesis",
+			"goal": "Merge all review findings, remove duplicates, rank risk, and decide the review outcome.",
+			"prompt": "Read all upstream review reports. Merge duplicate findings and rank each issue as blocker, major, minor, or suggestion. For each issue include category, evidence, impact, and recommended fix. Decide one final outcome: approve, request-changes, or needs-discussion. Be strict about business logic and security blockers. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.code-quality-review.outputs.report}}",
+				"{{nodes.security-review.outputs.report}}",
+				"{{nodes.business-logic-review.outputs.report}}",
+				"{{nodes.test-review.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 146,
+				"y": 13,
+				"width": 34
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read all upstream review reports. Merge duplicate findings and rank each issue as blocker, major, minor, or suggestion. For each issue include category, evidence, impact, and recommended fix. Decide one final outcome: approve, request-changes, or needs-discussion. Be strict about business logic and security blockers. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Reads all upstream review reports",
+					"Deduplicates findings",
+					"Ranks issues as blocker, major, minor, or suggestion",
+					"Produces a clear final recommendation"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		},
+		{
+			"id": "review-report",
+			"title": "Final Review Report",
+			"type": "synthesis",
+			"goal": "Produce the final code review report suitable for pasting into a PR, issue, or handoff note.",
+			"prompt": "Create a final code review report from the risk ranking and upstream reviews. Format it for direct use in a PR comment. Include: summary, final recommendation, blocking issues, major issues, minor suggestions, security notes, business logic notes, test gaps, and concrete next actions. Keep it concise but complete. If there are no issues in a section, say so explicitly. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+			"references": [],
+			"requiresApproval": false,
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.risk-ranking.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"layout": {
+				"x": 194,
+				"y": 13,
+				"width": 38
+			},
+			"executor": {
+				"kind": "agent",
+				"prompt": "Create a final code review report from the risk ranking and upstream reviews. Format it for direct use in a PR comment. Include: summary, final recommendation, blocking issues, major issues, minor suggestions, security notes, business logic notes, test gaps, and concrete next actions. Keep it concise but complete. If there are no issues in a section, say so explicitly. Important: this is a review/audit workflow; if you find blockers, security issues, business logic conflicts, or missing tests, still write result.json status as \"completed\" and put the findings, severity, and required fixes in report.md. Use \"failed\" only for execution/tooling failures that prevent review.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses the risk ranking",
+					"Produces a PR-ready final report",
+					"Includes summary, recommendation, issues, security notes, business logic notes, test gaps, and next actions",
+					"Does not omit blocker or major findings"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			}
+		}
+	],
+	"edges": [
+		{
+			"from": "scope-collection",
+			"to": "business-context"
+		},
+		{
+			"from": "business-context",
+			"to": "code-quality-review"
+		},
+		{
+			"from": "business-context",
+			"to": "security-review"
+		},
+		{
+			"from": "business-context",
+			"to": "business-logic-review"
+		},
+		{
+			"from": "business-context",
+			"to": "test-review"
+		},
+		{
+			"from": "code-quality-review",
+			"to": "risk-ranking"
+		},
+		{
+			"from": "security-review",
+			"to": "risk-ranking"
+		},
+		{
+			"from": "business-logic-review",
+			"to": "risk-ranking"
+		},
+		{
+			"from": "test-review",
+			"to": "risk-ranking"
+		},
+		{
+			"from": "risk-ranking",
+			"to": "review-report"
+		}
+	]
+}
