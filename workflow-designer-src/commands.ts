@@ -711,9 +711,16 @@ async function pickWorkflow(ctx: ExtensionCommandContext): Promise<string | null
 }
 
 async function pickSpec(ctx: ExtensionCommandContext, workflow: WorkflowDefinition): Promise<string | null> {
-	const specs = listSpecFiles(ctx.cwd);
+	const allSpecs = listSpecFiles(ctx.cwd);
+	const specs = allSpecs.filter((spec) => {
+		try {
+			return readWorkflowNameFromSpec(isAbsolute(spec) ? spec : join(ctx.cwd, spec)) === workflow.name;
+		} catch {
+			return false;
+		}
+	});
 	if (specs.length === 0) {
-		ctx.ui.notify("No spec files found. Pass a spec path explicitly: /workflow:run <workflow> <spec>", "warning");
+		ctx.ui.notify(`No spec files found for workflow ${workflow.name}. Use /workflow:create to generate one, or pass a matching spec explicitly.`, "warning");
 		return null;
 	}
 
