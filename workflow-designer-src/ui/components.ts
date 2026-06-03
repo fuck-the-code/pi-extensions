@@ -491,6 +491,12 @@ export class WorkflowDesignerComponent {
 			? ` Selected: ${selected.id} | type: ${selected.type ?? "node"} | executor: ${selected.executor?.kind ?? "agent"} | verify: ${selected.verification?.enabled === false || selected.completionPolicy?.semanticVerification === false ? "off" : "on"}`
 			: " No node selected";
 		lines.push(sideLine(pad(summary, innerW), th));
+		if (selected?.executor?.kind === "multi-agent") {
+			const agents = (selected.executor.agents ?? []).map((agent) => `${agent.id}${agent.role ? `:${agent.role}` : ""}`).join(" | ");
+			const phases = (selected.executor.phases ?? []).map((phase) => `${phase.id}->${phase.agent}`).join(" | ");
+			lines.push(sideLine(pad(truncateToWidth(` Agents: ${agents || "(none)"}`, innerW, "..."), innerW), th));
+			lines.push(sideLine(pad(truncateToWidth(` Phases: ${phases || "(none)"}`, innerW, "..."), innerW), th));
+		}
 		lines.push(sideLine(pad(` arrows select/auto-pan   |   wasd pan   |   Enter edit   |   r reload   |   Esc close   |   view ${this.panX},${this.panY}`, innerW), th));
 		lines.push(bottomBorder(innerW, th));
 		return lines.map((line) => truncateToWidth(line, outerW, "", true));

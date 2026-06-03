@@ -71,8 +71,8 @@ export function computeLayout(workflow: WorkflowDefinition, width: number, heigh
 export function measureNodeWidth(node: WorkflowNode): number {
 	const title = node.title ?? node.id;
 	const type = `type: ${node.type ?? "node"}`;
-	const verify = `verify: ${node.verification?.enabled === false || node.completionPolicy?.semanticVerification === false ? "off" : "on"}`;
-	return Math.max(20, Math.min(38, Math.max(title.length, type.length, verify.length) + 4));
+	const exec = node.executor?.kind === "multi-agent" ? `cluster: ${node.executor.agents?.length ?? 0} agents` : `exec: ${node.executor?.kind ?? "agent"}`;
+	return Math.max(20, Math.min(38, Math.max(title.length, type.length, exec.length) + 4));
 }
 
 export function orderLayersByBarycenter(layers: WorkflowNode[][], edges: WorkflowEdge[]): void {
@@ -203,7 +203,8 @@ export function drawNode(canvas: string[][], node: WorkflowNode, box: Required<W
 	putText(canvas, x, y, top);
 	putText(canvas, x, y + 1, `${midL}${pad(truncateToWidth(`${selectedMark}${node.title ?? node.id}`, inner, "..."), inner)}${midR}`);
 	putText(canvas, x, y + 2, `${midL}${pad(truncateToWidth(`type: ${node.type ?? "node"}`, inner, "..."), inner)}${midR}`);
-	putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(`verify: ${node.verification?.enabled === false || node.completionPolicy?.semanticVerification === false ? "off" : "on"}`, inner, "..."), inner)}${midR}`);
+	const exec = node.executor?.kind === "multi-agent" ? `cluster: ${node.executor.agents?.length ?? 0} agents` : `exec: ${node.executor?.kind ?? "agent"}`;
+	putText(canvas, x, y + 3, `${midL}${pad(truncateToWidth(exec, inner, "..."), inner)}${midR}`);
 	putText(canvas, x, y + 4, bottom);
 }
 
