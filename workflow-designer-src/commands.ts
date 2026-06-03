@@ -673,11 +673,21 @@ function reconcileRunFromArtifacts(runPath: string, cwd: string, onlyNodeId?: st
 
 	for (const node of nodes) {
 		const nodeDir = join(runDir, "nodes", node.id);
-		if (!existsSync(join(nodeDir, "result.json"))) continue;
 		const state = run.nodes[node.id];
 		if (!state) continue;
 		const canRepairNeedsRevision = workflow.name === "code-review" && state.status === "needs-revision";
 		if (["completed", "failed", "skipped"].includes(state.status) || (state.status === "needs-revision" && !canRepairNeedsRevision)) continue;
+		const phaseFailure = node.executor?.kind === "multi-agent" && !existsSync(join(nodeDir, "result.json")) ? detectMultiAgentPhaseFailure(nodeDir) : null;
+		if (phaseFailure) {
+			run.nodes[node.id] = {
+				...state,
+				status: "failed",
+				completedAt: new Date().toISOString(),
+				summary: `Multi-agent phase ${phaseFailure.phaseId} failed with exit code ${phaseFailure.exitCode}`,
+			};
+			continue;
+		}
+		if (!existsSync(join(nodeDir, "result.json"))) continue;
 		const completion = checkNodeCompletion(node, nodeDir, { treatNeedsRevisionAsCompleted: node.completionPolicy?.needsRevisionBlocks === false || node.completionPolicy?.findingsAreSuccess === true });
 		run.nodes[node.id] = {
 			...state,
@@ -693,6 +703,19 @@ function reconcileRunFromArtifacts(runPath: string, cwd: string, onlyNodeId?: st
 	updateRunAggregateStatus(run);
 	saveRun(runPath, run);
 	return run;
+}
+
+function detectMultiAgentPhaseFailure(nodeDir: string): { phaseId: string; exitCode: number } | null {
+	const summaryPath = join(nodeDir, "agent-output.md");
+	if (!existsSync(summaryPath)) return null;
+	const summary = readFileSync(summaryPath, "utf-8");
+	const pattern = /## Phase:\s*([^\n]+)[\s\S]*?Exit:\s*(\d+)/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(summary)) !== null) {
+		const exitCode = Number(match[2]);
+		if (Number.isFinite(exitCode) && exitCode !== 0) return { phaseId: match[1]!.trim(), exitCode };
+	}
+	return null;
 }
 
 async function pickWorkflow(ctx: ExtensionCommandContext): Promise<string | null> {
