@@ -173,6 +173,9 @@ export class RunDetailComponent {
 	}
 
 	private nodeConversationLines(nodeId: string, width: number): string[] {
+		const workflowNode = this.workflowNode(nodeId);
+		if (workflowNode?.executor?.kind === "multi-agent") return this.multiAgentConversationLines(nodeId, workflowNode, width);
+
 		const runDir = dirname(this.runPath);
 		const transcriptPath = join(runDir, "nodes", nodeId, "agent-output.md");
 		const eventsPath = join(runDir, "nodes", nodeId, "events.jsonl");
@@ -183,11 +186,68 @@ export class RunDetailComponent {
 				"No transcript yet.",
 				`Expected: ${relative(this.cwd, transcriptPath)}`,
 				`Raw events: ${relative(this.cwd, eventsPath)}`,
-			];
+			].map((line) => truncateToWidth(line, width - 1, "..."));
 		}
 		const content = readFileSync(transcriptPath, "utf-8");
 		return [`Conversation view for ${nodeId}`, `Transcript: ${relative(this.cwd, transcriptPath)}`, "", ...content.split("\n")]
 			.map((line) => truncateToWidth(line, width - 1, "..."));
+	}
+
+	private multiAgentConversationLines(nodeId: string, node: WorkflowNode, width: number): string[] {
+		const runDir = dirname(this.runPath);
+		const nodeDir = join(runDir, "nodes", nodeId);
+		const phases = node.executor?.phases ?? [];
+		const agents = node.executor?.agents ?? [];
+		const renderedPhaseIds = new Set<string>();
+		const lines: string[] = [
+			`Conversation view for ${nodeId}`,
+			"",
+			"Multi-agent conversations are grouped by agent.",
+		];
+
+		for (const agent of agents) {
+			lines.push("", `# ${agent.id}`);
+			if (agent.role) lines.push(`Role: ${agent.role}`);
+			const agentPhases = phases.filter((phase) => phase.agent === agent.id);
+			if (agentPhases.length === 0) {
+				lines.push("(no phases assigned)");
+				continue;
+			}
+			for (const phase of agentPhases) {
+				renderedPhaseIds.add(phase.id);
+				this.appendPhaseConversation(lines, nodeDir, phase.id, phase.goal);
+			}
+		}
+
+		const unassigned = phases.filter((phase) => !renderedPhaseIds.has(phase.id));
+		if (unassigned.length > 0) {
+			lines.push("", "# Unconfigured agent phases");
+			for (const phase of unassigned) this.appendPhaseConversation(lines, nodeDir, phase.id, phase.goal, phase.agent);
+		}
+
+		const parentTranscript = join(nodeDir, "agent-output.md");
+		if (existsSync(parentTranscript)) {
+			lines.push("", "# Parent node phase summary", `Transcript: ${relative(this.cwd, parentTranscript)}`, "");
+			lines.push(...readFileSync(parentTranscript, "utf-8").split("\n"));
+		}
+
+		return lines.map((line) => truncateToWidth(line, width - 1, "..."));
+	}
+
+	private appendPhaseConversation(lines: string[], nodeDir: string, phaseId: string, goal?: string, agentId?: string): void {
+		const phaseDir = join(nodeDir, "agents", phaseId);
+		const transcriptPath = join(phaseDir, "agent-output.md");
+		const eventsPath = join(phaseDir, "events.jsonl");
+		lines.push("", `## ${phaseId}${agentId ? ` -> ${agentId}` : ""}`);
+		if (goal) lines.push(`Goal: ${goal}`);
+		lines.push(`Transcript: ${relative(this.cwd, transcriptPath)}${existsSync(transcriptPath) ? "" : " (missing)"}`);
+		if (existsSync(transcriptPath)) {
+			lines.push("", ...readFileSync(transcriptPath, "utf-8").split("\n"));
+		} else if (existsSync(eventsPath)) {
+			lines.push(`No transcript yet. Raw events: ${relative(this.cwd, eventsPath)}`);
+		} else {
+			lines.push("No transcript or events yet.");
+		}
 	}
 
 	private nodeDetailLines(nodeId: string, state: WorkflowRunNodeState, width: number): string[] {
