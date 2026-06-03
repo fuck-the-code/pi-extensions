@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowRun } from "./types";
@@ -464,12 +464,60 @@ async function inspectWorkflowRun(args: string | undefined, ctx: ExtensionComman
 	}
 
 	const run = reconcileRunFromArtifacts(runPath, ctx.cwd);
-	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+	const result = await ctx.ui.custom<{ action: "close" | "retry"; nodeId?: string } | undefined>((tui, theme, _kb, done) => {
 		return new RunDetailComponent(tui, theme, ctx.cwd, runPath!, run, done);
 	}, {
 		overlay: true,
 		overlayOptions: { anchor: "center", width: "88%", maxHeight: "88%", margin: 2 },
 	});
+	if (result?.action === "retry") {
+		await retryOrResumeWorkflowRun(runPath, ctx.cwd, result.nodeId);
+		ctx.ui.notify(`Retry/resume scheduled for ${relative(ctx.cwd, runPath)}.`, "info");
+		await startWorkflowRun(runPath, ctx);
+	}
+}
+
+async function retryOrResumeWorkflowRun(runPath: string, cwd: string, selectedNodeId: string | undefined): Promise<void> {
+	await updateRunSerialized(runPath, (run) => {
+		const workflow = loadWorkflow(resolveWorkflowFilePath(cwd, run.workflowFile));
+		const runDir = dirname(runPath);
+		const retryable = new Set(["failed", "needs-revision", "running"]);
+		const selectedState = selectedNodeId ? run.nodes[selectedNodeId] : undefined;
+		const seeds = selectedNodeId && selectedState && retryable.has(selectedState.status)
+			? [selectedNodeId]
+			: Object.entries(run.nodes).filter(([, state]) => retryable.has(state.status)).map(([id]) => id);
+		if (seeds.length === 0 && selectedNodeId && run.nodes[selectedNodeId]?.status !== "completed") seeds.push(selectedNodeId);
+		const affected = collectDescendants(workflow, seeds);
+		for (const nodeId of affected) {
+			const state = run.nodes[nodeId];
+			if (!state || state.status === "completed" || state.status === "skipped") continue;
+			const blockers = workflow.edges.filter((edge) => edge.to === nodeId).map((edge) => edge.from).filter((from) => run.nodes[from]?.status !== "completed");
+			run.nodes[nodeId] = blockers.length > 0 ? { status: "blocked", blockedBy: blockers } : { status: "ready", blockedBy: [] };
+			const nodeDir = join(runDir, "nodes", nodeId);
+			for (const file of ["result.json", "verification.json"]) {
+				try { rmSync(join(nodeDir, file), { force: true }); } catch {}
+			}
+		}
+		run.status = "created";
+		delete (run as WorkflowRun & { abortedAt?: string; abortReason?: string }).abortedAt;
+		delete (run as WorkflowRun & { abortedAt?: string; abortReason?: string }).abortReason;
+		refreshReadyStates(run, workflow);
+		updateRunAggregateStatus(run);
+	});
+}
+
+function collectDescendants(workflow: WorkflowDefinition, seeds: string[]): Set<string> {
+	const result = new Set<string>(seeds);
+	const queue = [...seeds];
+	while (queue.length > 0) {
+		const id = queue.shift()!;
+		for (const edge of workflow.edges.filter((edge) => edge.from === id)) {
+			if (result.has(edge.to)) continue;
+			result.add(edge.to);
+			queue.push(edge.to);
+		}
+	}
+	return result;
 }
 
 function ensureWorkflowGitignore(cwd: string): void {

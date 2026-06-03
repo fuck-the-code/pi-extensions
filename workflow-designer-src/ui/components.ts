@@ -79,14 +79,14 @@ export class RunDetailComponent {
 		private cwd: string,
 		private runPath: string,
 		private run: WorkflowRun,
-		private done: () => void,
+		private done: (result?: { action: "close" | "retry"; nodeId?: string }) => void,
 	) {
 		this.refreshTimer = setInterval(() => this.tui.requestRender(), 1000);
 	}
 
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-			this.done();
+			this.done({ action: "close" });
 			return;
 		}
 		const nodeIds = Object.keys(this.run.nodes);
@@ -99,6 +99,9 @@ export class RunDetailComponent {
 			this.scroll = 0;
 		} else if (data === "Q" || data === "q") {
 			this.openSelectedConversationFile();
+		} else if (data === "R" || data === "r") {
+			const nodeId = Object.keys(this.run.nodes)[this.selected];
+			if (nodeId) this.done({ action: "retry", nodeId });
 		}
 		this.tui.requestRender();
 	}
@@ -139,7 +142,7 @@ export class RunDetailComponent {
 
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 		const msg = this.message ? ` | ${this.message}` : "";
-		lines.push(sideLine(pad(` up/down select node   |   left/right scroll   |   v view:${this.view}   |   Q open in VSCode   |   Esc close${msg}`, innerW), th));
+		lines.push(sideLine(pad(` up/down select   |   left/right scroll   |   v view:${this.view}   |   Q open   |   R retry/resume   |   Esc close${msg}`, innerW), th));
 		lines.push(bottomBorder(innerW, th));
 		return lines.map((line) => truncateToWidth(line, outerW, "", true));
 	}
