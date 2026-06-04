@@ -28,6 +28,14 @@ export function isSafeIdentifier(value: string): boolean {
 	return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+export function validateArtifactPaths(label: string, values: string[]): void {
+	for (const value of values) {
+		if (value.length === 0 || isAbsolute(value) || value.split(/[\\/]+/).includes("..")) {
+			throw new Error(`Unsafe ${label} path: ${value || "(empty)"}`);
+		}
+	}
+}
+
 export function isInside(root: string, candidate: string): boolean {
 	const rel = relative(root, candidate);
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -48,6 +56,11 @@ export function validateWorkflowShape(workflow: WorkflowDefinition): void {
 		if (!isSafeIdentifier(node.id)) throw new Error(`Invalid node id: ${node.id}`);
 		if (ids.has(node.id)) throw new Error(`Duplicate node id: ${node.id}`);
 		ids.add(node.id);
+		validateArtifactPaths(`node ${node.id} output`, node.outputs ?? []);
+		if (node.verification?.output?.path) validateArtifactPaths(`node ${node.id} verification output`, [node.verification.output.path]);
+		const protocol = node.executor?.protocol;
+		if (protocol?.sharedArtifactsDir) validateArtifactPaths(`node ${node.id} shared artifacts directory`, [protocol.sharedArtifactsDir]);
+		for (const phase of node.executor?.phases ?? []) validateArtifactPaths(`node ${node.id} phase ${phase.id} output`, phase.outputs ?? []);
 	}
 	for (const edge of workflow.edges) {
 		if (!ids.has(edge.from)) throw new Error(`Unknown edge source: ${edge.from}`);

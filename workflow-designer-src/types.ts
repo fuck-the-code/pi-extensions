@@ -118,6 +118,12 @@ export const DEFAULT_WORKFLOW_NAME = "demo";
 
 export type RunNodeStatus = "blocked" | "ready" | "running" | "waiting-approval" | "completed" | "failed" | "needs-revision" | "skipped";
 
+export interface WorkflowRunNodeVerificationState {
+	status: "passed" | "failed";
+	reason?: string;
+	checkedAt?: string;
+}
+
 export interface WorkflowRunNodeState {
 	status: RunNodeStatus;
 	blockedBy?: string[];
@@ -126,6 +132,7 @@ export interface WorkflowRunNodeState {
 	result?: string | null;
 	outputs?: string[];
 	summary?: string;
+	verification?: WorkflowRunNodeVerificationState;
 }
 
 export interface WorkflowRun {

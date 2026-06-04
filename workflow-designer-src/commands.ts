@@ -8,11 +8,14 @@ import {
 	listRuns,
 	loadRun,
 	refreshReadyStates,
+	requireNonEmptyDeclaredArtifact,
 	resolveNodeInputs,
 	resolveRunPath,
 	runPiPrint,
 	saveRun,
 	updateRunAggregateStatus,
+	validateDeclaredArtifactPath,
+	validateDeclaredArtifactPaths,
 	verifyNodeGoal,
 } from "./run";
 import {
@@ -265,11 +268,10 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 	}
 
 	ensureWorkflowGitignore(ctx.cwd);
-	const runId = makeRunId(workflow.name, absSpecPath);
-	const runDir = join(ctx.cwd, ".workflow", "runs", runId);
+	const { runId, runDir } = createUniqueRunDirectory(ctx.cwd, workflow.name, absSpecPath);
 	const inputsDir = join(runDir, "inputs");
-	mkdirSync(inputsDir, { recursive: true });
-	mkdirSync(join(runDir, "nodes"), { recursive: true });
+	mkdirSync(inputsDir);
+	mkdirSync(join(runDir, "nodes"));
 
 	const copiedSpec = join(inputsDir, "spec.md");
 	copyFileSync(absSpecPath, copiedSpec);
@@ -289,6 +291,23 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 	writeFileSync(runPath, `${JSON.stringify(run, null, "\t")}\n`, "utf-8");
 	ctx.ui.notify(`Created workflow run: ${relative(ctx.cwd, runPath)}. Starting auto-run...`, "info");
 	await startWorkflowRun(runPath, ctx);
+}
+
+function createUniqueRunDirectory(cwd: string, workflowName: string, specPath: string): { runId: string; runDir: string } {
+	const runsRoot = join(cwd, ".workflow", "runs");
+	mkdirSync(runsRoot, { recursive: true });
+	for (let attempt = 0; attempt < 10; attempt += 1) {
+		const runId = makeRunId(workflowName, specPath);
+		const runDir = join(runsRoot, runId);
+		try {
+			mkdirSync(runDir);
+			return { runId, runDir };
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+			throw err;
+		}
+	}
+	throw new Error("Unable to allocate a unique workflow run directory");
 }
 
 function looksLikeExistingSpecPath(cwd: string, value: string): boolean {
@@ -381,9 +400,16 @@ async function executeOneNode(ctx: ExtensionCommandContext, runPath: string, wor
 		latest.status = "running";
 	});
 
-	const result = node.executor?.kind === "multi-agent"
-		? await executeMultiAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal)
-		: await executeSingleAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal);
+	let result: { exitCode: number; output: string };
+	try {
+		result = node.executor?.kind === "multi-agent"
+			? await executeMultiAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal)
+			: await executeSingleAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		writeFileSync(join(nodeDir, "agent-output.md"), `Workflow node failed before agent execution: ${message}\n`, "utf-8");
+		result = { exitCode: 1, output: message };
+	}
 
 	run = loadRun(runPath);
 	const wasAborted = signal?.aborted || run.status === "aborted";
@@ -393,7 +419,7 @@ async function executeOneNode(ctx: ExtensionCommandContext, runPath: string, wor
 				...latest.nodes[node.id],
 				status: "failed",
 				completedAt: new Date().toISOString(),
-				summary: signal?.aborted ? "aborted manually" : `Agent process failed with exit code ${result.exitCode}`,
+				summary: signal?.aborted ? "aborted manually" : summarizeExecutionFailure(result),
 			};
 			latest.status = wasAborted ? "aborted" : "paused";
 		});
@@ -403,8 +429,10 @@ async function executeOneNode(ctx: ExtensionCommandContext, runPath: string, wor
 	const completion = checkNodeCompletion(node, nodeDir, { treatNeedsRevisionAsCompleted: node.completionPolicy?.needsRevisionBlocks === false || node.completionPolicy?.findingsAreSuccess === true });
 	let finalStatus = completion.status;
 	let finalSummary = completion.summary;
+	let verificationState: WorkflowRun["nodes"][string]["verification"] | undefined;
 	if (completion.status === "completed" && node.completionPolicy?.semanticVerification !== false && node.verification?.enabled !== false) {
 		const verification = await verifyNodeGoal(ctx.cwd, workflow, run, node, runDir, nodeDir, signal);
+		verificationState = { status: verification.passed ? "passed" : "failed", reason: verification.reason, checkedAt: new Date().toISOString() };
 		if (!verification.passed) {
 			finalStatus = "needs-revision";
 			finalSummary = `Goal verification failed: ${verification.reason}`;
@@ -421,6 +449,7 @@ async function executeOneNode(ctx: ExtensionCommandContext, runPath: string, wor
 			result: relative(runDir, join(nodeDir, "result.json")),
 			outputs: completion.outputs.map((output) => relative(runDir, join(nodeDir, output))),
 			summary: finalSummary,
+			verification: verificationState,
 		};
 		if (finalStatus === "failed" || finalStatus === "needs-revision") latest.status = "paused";
 	});
@@ -458,15 +487,19 @@ async function executeMultiAgentNode(
 	const phases = executor?.phases ?? [];
 	if (phases.length === 0) return { exitCode: 1, output: "multi-agent executor requires phases" };
 
-	mkdirSync(join(nodeDir, "shared"), { recursive: true });
-	mkdirSync(join(nodeDir, "agents"), { recursive: true });
-	mkdirSync(join(nodeDir, "messages"), { recursive: true });
+	const sharedDir = validateDeclaredArtifactPath(nodeDir, "shared artifacts directory", executor?.protocol?.sharedArtifactsDir ?? "shared");
+	const messagesDir = validateDeclaredArtifactPath(nodeDir, "messages directory", "messages");
+	const agentsDir = validateDeclaredArtifactPath(nodeDir, "agents directory", "agents");
+	mkdirSync(sharedDir.absolutePath, { recursive: true });
+	mkdirSync(agentsDir.absolutePath, { recursive: true });
+	mkdirSync(messagesDir.absolutePath, { recursive: true });
 	writeFileSync(join(nodeDir, "prompt.md"), buildNodePrompt(ctx.cwd, workflow, run, node, runDir, nodeDir), "utf-8");
 
 	const phaseSummaries: string[] = [];
 	for (const phase of phases) {
 		if (signal?.aborted) return { exitCode: 130, output: phaseSummaries.join("\n\n") };
-		const phaseDir = join(nodeDir, "agents", phase.id);
+		const phaseOutputs = validateDeclaredArtifactPaths(nodeDir, `phase ${phase.id} output`, phase.outputs ?? []);
+		const phaseDir = join(agentsDir.absolutePath, phase.id);
 		mkdirSync(phaseDir, { recursive: true });
 		const prompt = buildMultiAgentPhasePrompt(ctx.cwd, workflow, run, node, phase, runDir, nodeDir);
 		writeFileSync(join(phaseDir, "prompt.md"), prompt, "utf-8");
@@ -484,11 +517,29 @@ async function executeMultiAgentNode(
 			writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
 			return { exitCode: result.exitCode, output };
 		}
+		for (const artifact of phaseOutputs) {
+			try {
+				requireNonEmptyDeclaredArtifact(nodeDir, `phase ${phase.id} output`, artifact.relativePath);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				phaseSummaries.push(`## Phase failure\n\nPhase: ${phase.id}\nArtifact: ${artifact.relativePath}\nReason: ${message}`);
+				const output = phaseSummaries.join("\n\n");
+				writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+				return { exitCode: 1, output };
+			}
+		}
 	}
 
 	const output = phaseSummaries.join("\n\n");
 	writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
 	return { exitCode: 0, output };
+}
+
+function summarizeExecutionFailure(result: { exitCode: number; output: string }): string {
+	const reason = result.output.match(/^Reason:\s*(.+)$/m)?.[1]
+		?? result.output.match(/^Artifact:\s*(.+)$/m)?.[1]
+		?? result.output.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim();
+	return reason ? `Agent process failed with exit code ${result.exitCode}: ${reason.slice(0, 300)}` : `Agent process failed with exit code ${result.exitCode}`;
 }
 
 function buildMultiAgentPhasePrompt(
@@ -503,10 +554,13 @@ function buildMultiAgentPhasePrompt(
 	const executor = node.executor;
 	const agents = executor?.agents ?? [];
 	const agent = agents.find((item) => item.id === phase.agent);
-	const sharedDir = executor?.protocol?.sharedArtifactsDir ?? "shared";
+	const sharedDir = validateDeclaredArtifactPath(nodeDir, "shared artifacts directory", executor?.protocol?.sharedArtifactsDir ?? "shared");
+	const messagesDir = validateDeclaredArtifactPath(nodeDir, "messages directory", "messages");
+	const phaseOutputs = validateDeclaredArtifactPaths(nodeDir, `phase ${phase.id} output`, phase.outputs ?? []);
+	const parentOutputs = validateDeclaredArtifactPaths(nodeDir, "parent node output", node.outputs ?? ["result.json", "report.md"]);
 	const nodeInputs = resolveNodeInputs(cwd, node, run, runDir);
 	const phaseInputs = (phase.inputs ?? []).map((input) => resolveMultiAgentPhasePath(cwd, run, nodeDir, input));
-	return `# Multi-Agent Workflow Node Phase\n\nYou are executing one real Pi sub-agent phase inside a multi-agent workflow node.\n\nThis is not a broadcast chat. Only do the work assigned to your phase. Communicate by writing explicit artifacts/messages.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Phase\n\nID: ${phase.id}\nAgent: ${phase.agent}\nRole: ${agent?.role ?? phase.agent}\nGoal: ${phase.goal ?? phase.prompt ?? "Complete this phase."}\nPrompt: ${phase.prompt ?? phase.goal ?? "Complete this phase."}\nTriggered by: ${phase.triggeredBy ?? "workflow engine"}\n\n## Agent Responsibilities\n\n${(agent?.responsibilities ?? []).map((item) => `- ${item}`).join("\n") || "- Follow the phase prompt."}\n\n## Protocol\n\n- Coordinator: ${executor?.coordinator ?? "manager"}\n- Mode: ${executor?.protocol?.mode ?? "managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Agents do not respond unless explicitly assigned a task by the coordinator."}\n- Shared artifacts directory: ${relative(cwd, join(nodeDir, sharedDir))}\n- Messages directory: ${relative(cwd, join(nodeDir, "messages"))}\n\n## Available Inputs\n\n${[...nodeInputs, ...phaseInputs].map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Phase Outputs\n\n${(phase.outputs ?? []).map((output) => `- ${relative(cwd, join(nodeDir, output))}`).join("\n") || "- Write useful phase artifacts under shared/ or messages/."}\n\n## Finalization Rule\n\nOnly the coordinator/finalize phase should write the parent node's result.json and report.md. If this phase is not finalization, do not mark the parent node complete.\n\nParent node final required outputs:\n${(node.outputs ?? ["result.json", "report.md"]).map((output) => `- ${relative(cwd, join(nodeDir, output))}`).join("\n")}\n\n## Important\n\n- Do not modify workflow topology or run.json.\n- Do not broadcast requests to all agents. Address messages to a specific next agent/coordinator.\n- If you need to pass work to another agent, write a JSONL message in messages/ with from/to/type/artifact/summary.\n- Keep artifacts concise and actionable.\n`;
+	return `# Multi-Agent Workflow Node Phase\n\nYou are executing one real Pi sub-agent phase inside a multi-agent workflow node.\n\nThis is not a broadcast chat. Only do the work assigned to your phase. Communicate by writing explicit artifacts/messages.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Phase\n\nID: ${phase.id}\nAgent: ${phase.agent}\nRole: ${agent?.role ?? phase.agent}\nGoal: ${phase.goal ?? phase.prompt ?? "Complete this phase."}\nPrompt: ${phase.prompt ?? phase.goal ?? "Complete this phase."}\nTriggered by: ${phase.triggeredBy ?? "workflow engine"}\n\n## Agent Responsibilities\n\n${(agent?.responsibilities ?? []).map((item) => `- ${item}`).join("\n") || "- Follow the phase prompt."}\n\n## Protocol\n\n- Coordinator: ${executor?.coordinator ?? "manager"}\n- Mode: ${executor?.protocol?.mode ?? "managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Agents do not respond unless explicitly assigned a task by the coordinator."}\n- Shared artifacts directory: ${relative(cwd, sharedDir.absolutePath)}\n- Messages directory: ${relative(cwd, messagesDir.absolutePath)}\n\n## Available Inputs\n\n${[...nodeInputs, ...phaseInputs].map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Phase Outputs\n\n${phaseOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n") || "- Write useful phase artifacts under shared/ or messages/."}\n\n## Finalization Rule\n\nOnly the coordinator/finalize phase should write the parent node's result.json and report.md. If this phase is not finalization, do not mark the parent node complete.\n\nParent node final required outputs:\n${parentOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n")}\n\n## Important\n\n- Do not modify workflow topology or run.json.\n- Do not broadcast requests to all agents. Address messages to a specific next agent/coordinator.\n- If you need to pass work to another agent, write a JSONL message in messages/ with from/to/type/artifact/summary.\n- Keep artifacts concise and actionable.\n`;
 }
 
 function resolveMultiAgentPhasePath(cwd: string, run: WorkflowRun, nodeDir: string, value: string): string {
@@ -614,7 +668,7 @@ async function retryOrResumeWorkflowRun(runPath: string, cwd: string): Promise<v
 			const state = run.nodes[nodeId];
 			if (!state || state.status === "completed" || state.status === "skipped") continue;
 			const blockers = workflow.edges.filter((edge) => edge.to === nodeId).map((edge) => edge.from).filter((from) => run.nodes[from]?.status !== "completed");
-			run.nodes[nodeId] = blockers.length > 0 ? { status: "blocked", blockedBy: blockers } : { status: "ready", blockedBy: [] };
+			run.nodes[nodeId] = blockers.length > 0 ? { status: "blocked", blockedBy: blockers, verification: undefined } : { status: "ready", blockedBy: [], verification: undefined };
 			const nodeDir = join(runDir, "nodes", nodeId);
 			for (const file of ["result.json", "verification.json"]) {
 				try { rmSync(join(nodeDir, file), { force: true }); } catch {}
@@ -700,6 +754,14 @@ function reconcileRunFromArtifacts(runPath: string, cwd: string, onlyNodeId?: st
 		const nodeDir = join(runDir, "nodes", node.id);
 		const state = run.nodes[node.id];
 		if (!state) continue;
+		if (state.verification?.status === "failed") {
+			run.nodes[node.id] = {
+				...state,
+				status: "needs-revision",
+				summary: state.summary ?? `Goal verification failed: ${state.verification.reason ?? "semantic verification failed"}`,
+			};
+			continue;
+		}
 		const canRepairNeedsRevision = workflow.name === "code-review" && state.status === "needs-revision";
 		if (["completed", "failed", "skipped"].includes(state.status) || (state.status === "needs-revision" && !canRepairNeedsRevision)) continue;
 		const phaseFailure = node.executor?.kind === "multi-agent" && !existsSync(join(nodeDir, "result.json")) ? detectMultiAgentPhaseFailure(nodeDir) : null;
@@ -721,6 +783,7 @@ function reconcileRunFromArtifacts(runPath: string, cwd: string, onlyNodeId?: st
 			result: relative(runDir, join(nodeDir, "result.json")),
 			outputs: completion.outputs.map((output) => relative(runDir, join(nodeDir, output))),
 			summary: completion.summary,
+			verification: completion.status === "completed" ? state.verification : undefined,
 		};
 	}
 

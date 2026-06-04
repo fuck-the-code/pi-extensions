@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { WorkflowDefinition, WorkflowInputValidation, WorkflowRunNodeState } from "./types";
@@ -61,9 +62,10 @@ export function validateSpec(path: string, validation: WorkflowInputValidation |
 
 export function makeRunId(workflowName: string, specPath: string): string {
 	const now = new Date();
-	const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+	const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`;
 	const specName = basename(specPath).replace(/\.[^.]+$/, "");
-	return `${slug(workflowName)}-${slug(specName)}-${stamp}`;
+	const entropy = randomBytes(4).toString("hex");
+	return `${slug(workflowName)}-${slug(specName)}-${stamp}-${entropy}`;
 }
 
 export function slug(value: string): string {

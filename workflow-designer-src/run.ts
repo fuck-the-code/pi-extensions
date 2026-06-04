@@ -8,9 +8,10 @@ const MAX_TRANSCRIPT_BLOCK_CHARS = 12_000;
 
 export function buildNodePrompt(cwd: string, workflow: WorkflowDefinition, run: WorkflowRun, node: WorkflowNode, runDir: string, nodeDir: string): string {
 	const resolvedInputs = resolveNodeInputs(cwd, node, run, runDir);
+	const requiredOutputs = validateDeclaredArtifactPaths(nodeDir, "node output", node.outputs ?? ["result.json", "report.md"]);
 	const policy = node.completionPolicy ?? {};
 	const criteria = node.verification?.criteria ?? [];
-	return `# Workflow Node Execution\n\nYou are executing one node in a goal-driven workflow.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Initial Spec\n\nPath: ${run.inputs.spec}\n\nThe initial spec is the source of truth for this workflow run.\n\n## Current Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nType: ${node.type ?? "node"}\nExecutor: ${node.executor?.kind ?? "agent"}\n\n## Node Goal\n\n${node.goal ?? node.description ?? "Complete this node."}\n\n## Node Prompt\n\n${node.executor?.prompt ?? node.prompt ?? node.additionalPrompt ?? node.description ?? node.goal ?? "Complete this node."}\n\n## Completion Policy\n\n- artifactCheck: ${policy.artifactCheck ?? true}\n- semanticVerification: ${policy.semanticVerification ?? false}\n- needsRevisionBlocks: ${policy.needsRevisionBlocks ?? true}\n- findingsAreSuccess: ${policy.findingsAreSuccess ?? false}\n- failedBlocks: ${policy.failedBlocks ?? true}\n\n## Verification Criteria\n\n${criteria.map((criterion) => `- ${criterion}`).join("\n") || "- (none)"}\n\n## References\n\n${(node.references ?? []).map((ref) => `- ${ref}`).join("\n") || "- (none)"}\n\n## Inputs\n\n${resolvedInputs.map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Output Directory\n\nWrite all node outputs under:\n\n${relative(cwd, nodeDir)}\n\n## Required Outputs\n\n${(node.outputs ?? ["result.json", "report.md"]).map((output) => `- ${relative(cwd, join(nodeDir, output))}`).join("\n")}\n\n## Result Contract\n\nYou must write result.json exactly in this shape:\n\n\`\`\`json\n{\n  "status": "passed | completed | failed | needs-revision",\n  "summary": "short summary",\n  "issues": [\n    { "severity": "critical | major | minor", "message": "issue description" }\n  ],\n  "outputs": ["report.md"]\n}\n\`\`\`\n\n## Completion Rules\n\nThe node is not complete until:\n\n1. result.json exists in the node output directory.\n2. result.json.status is one of passed, completed, failed, needs-revision.\n3. All required outputs exist and are non-empty.\n4. The node goal has been addressed.\n\n## Important Rules\n\n- Do not modify workflow topology or run.json.\n- Prefer writing only inside this node output directory unless implementation work explicitly requires code changes.\n- Upstream outputs are available through the input paths listed above.\n- For review/audit/analysis/synthesis nodes where findingsAreSuccess is true, discovered issues are successful findings. Use completed unless the node itself could not perform its review.\n`;
+	return `# Workflow Node Execution\n\nYou are executing one node in a goal-driven workflow.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Initial Spec\n\nPath: ${run.inputs.spec}\n\nThe initial spec is the source of truth for this workflow run.\n\n## Current Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nType: ${node.type ?? "node"}\nExecutor: ${node.executor?.kind ?? "agent"}\n\n## Node Goal\n\n${node.goal ?? node.description ?? "Complete this node."}\n\n## Node Prompt\n\n${node.executor?.prompt ?? node.prompt ?? node.additionalPrompt ?? node.description ?? node.goal ?? "Complete this node."}\n\n## Completion Policy\n\n- artifactCheck: ${policy.artifactCheck ?? true}\n- semanticVerification: ${policy.semanticVerification ?? false}\n- needsRevisionBlocks: ${policy.needsRevisionBlocks ?? true}\n- findingsAreSuccess: ${policy.findingsAreSuccess ?? false}\n- failedBlocks: ${policy.failedBlocks ?? true}\n\n## Verification Criteria\n\n${criteria.map((criterion) => `- ${criterion}`).join("\n") || "- (none)"}\n\n## References\n\n${(node.references ?? []).map((ref) => `- ${ref}`).join("\n") || "- (none)"}\n\n## Inputs\n\n${resolvedInputs.map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Output Directory\n\nWrite all node outputs under:\n\n${relative(cwd, nodeDir)}\n\n## Required Outputs\n\n${requiredOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n")}\n\n## Result Contract\n\nYou must write result.json exactly in this shape:\n\n\`\`\`json\n{\n  "status": "passed | completed | failed | needs-revision",\n  "summary": "short summary",\n  "issues": [\n    { "severity": "critical | major | minor", "message": "issue description" }\n  ],\n  "outputs": ["report.md"]\n}\n\`\`\`\n\n## Completion Rules\n\nThe node is not complete until:\n\n1. result.json exists in the node output directory.\n2. result.json.status is one of passed, completed, failed, needs-revision.\n3. All required outputs exist and are non-empty.\n4. The node goal has been addressed.\n\n## Important Rules\n\n- Do not modify workflow topology or run.json.\n- Prefer writing only inside this node output directory unless implementation work explicitly requires code changes.\n- Upstream outputs are available through the input paths listed above.\n- For review/audit/analysis/synthesis nodes where findingsAreSuccess is true, discovered issues are successful findings. Use completed unless the node itself could not perform its review.\n`;
 }
 
 export function resolveNodeInputs(cwd: string, node: WorkflowNode, run: WorkflowRun, runDir: string): string[] {
@@ -156,11 +157,10 @@ export function checkNodeCompletion(
 
 	const declaredOutputs = Array.from(new Set([...(parsed.outputs ?? []), ...requiredOutputs]));
 	for (const output of declaredOutputs) {
-		if (!isSafeRelativePath(output)) return { status: "failed", outputs: declaredOutputs, summary: `Unsafe output path: ${output}` };
-		const outputPath = resolve(nodeDir, output);
-		if (!isInside(resolve(nodeDir), outputPath)) return { status: "failed", outputs: declaredOutputs, summary: `Output escapes node directory: ${output}` };
-		if (!existsSync(outputPath) || !statSync(outputPath).isFile() || statSync(outputPath).size === 0) {
-			return { status: "failed", outputs: declaredOutputs, summary: `Missing or empty output: ${output}` };
+		try {
+			requireNonEmptyDeclaredArtifact(nodeDir, "output", output);
+		} catch (err) {
+			return { status: "failed", outputs: declaredOutputs, summary: err instanceof Error ? err.message : String(err) };
 		}
 	}
 
@@ -183,6 +183,29 @@ export function isSafeRelativePath(value: string): boolean {
 	return value.length > 0 && !isAbsolute(value) && !value.split(/[\\/]+/).includes("..");
 }
 
+export type DeclaredArtifactPath = { relativePath: string; absolutePath: string };
+
+export function validateDeclaredArtifactPath(baseDir: string, label: string, value: string): DeclaredArtifactPath {
+	if (!isSafeRelativePath(value)) throw new Error(`Unsafe ${label} path: ${value || "(empty)"}`);
+	const root = resolve(baseDir);
+	const absolutePath = resolve(root, value);
+	if (!isInside(root, absolutePath)) throw new Error(`${label} path escapes node directory: ${value}`);
+	return { relativePath: value, absolutePath };
+}
+
+export function validateDeclaredArtifactPaths(baseDir: string, label: string, values: string[]): DeclaredArtifactPath[] {
+	return values.map((value) => validateDeclaredArtifactPath(baseDir, label, value));
+}
+
+export function requireNonEmptyDeclaredArtifact(baseDir: string, label: string, value: string): DeclaredArtifactPath {
+	const artifact = validateDeclaredArtifactPath(baseDir, label, value);
+	if (!existsSync(artifact.absolutePath)) throw new Error(`Missing ${label}: ${value}`);
+	const stat = statSync(artifact.absolutePath);
+	if (!stat.isFile()) throw new Error(`${label} is not a regular file: ${value}`);
+	if (stat.size === 0) throw new Error(`Empty ${label}: ${value}`);
+	return artifact;
+}
+
 export type NodeVerificationResult = {
 	passed: boolean;
 	confidence: "low" | "medium" | "high" | string;
@@ -200,7 +223,8 @@ export async function verifyNodeGoal(
 	nodeDir: string,
 	signal?: AbortSignal,
 ): Promise<NodeVerificationResult> {
-	const verificationPath = join(nodeDir, node.verification?.output?.path ?? "verification.json");
+	const verificationArtifact = validateDeclaredArtifactPath(nodeDir, "verification output", node.verification?.output?.path ?? "verification.json");
+	const verificationPath = verificationArtifact.absolutePath;
 	const promptPath = join(nodeDir, "verifier-prompt.md");
 	const outputPath = join(nodeDir, "verifier-output.md");
 	const eventsPath = join(nodeDir, "verifier-events.jsonl");
