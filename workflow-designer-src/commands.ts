@@ -213,7 +213,7 @@ Useful source files:
 - For implementation/remediation tasks, prefer a multi-agent internal feedback loop when verification should guide fixes: manager-plan -> developer-implement -> verifier-review -> developer-fix -> verifier-recheck -> manager-finalize.
 - Avoid broadcast/group-chat multi-agent design; use manager/router + shared artifacts + directed messages.
 - Treat review findings as successful outputs for review nodes; do not mark a review node failed just because it found issues.
-- Treat verification as an agent definition: top-level `verification.agent` may define the final gate verifier role/responsibilities, while multi-agent implementation nodes should define verifier/tester as normal internal `executor.agents` and `phases`.
+- Treat verification as an agent definition: top-level \`verification.agent\` may define the final gate verifier role/responsibilities, while multi-agent implementation nodes should define verifier/tester as normal internal \`executor.agents\` and \`phases\`.
 - Treat engine-level node verification as a final quality gate, not as the primary developer feedback loop. If a multi-agent node already has verifier/recheck phases, keep outer verification lightweight and focused on whether the final node report/result addressed the internal verifier findings.
 
 ## Required Output Files After Confirmation
