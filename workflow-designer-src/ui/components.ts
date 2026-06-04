@@ -100,6 +100,8 @@ export class RunDetailComponent {
 			this.scroll = 0;
 		} else if (data === "Q" || data === "q") {
 			this.openSelectedConversationFile();
+		} else if (data === "F" || data === "f") {
+			this.openFinalReportFile();
 		} else if (data === "R" || data === "r") {
 			this.done({ action: "retry" });
 		}
@@ -142,7 +144,7 @@ export class RunDetailComponent {
 
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 		const msg = this.message ? ` | ${this.message}` : "";
-		lines.push(sideLine(pad(` up/down select   |   left/right scroll   |   v view:${this.view}   |   Q open   |   R resume run   |   Esc close${msg}`, innerW), th));
+		lines.push(sideLine(pad(` up/down select   |   left/right scroll   |   v view:${this.view}   |   Q open log   |   F final report   |   R resume   |   Esc close${msg}`, innerW), th));
 		lines.push(bottomBorder(innerW, th));
 		return lines.map((line) => truncateToWidth(line, outerW, "", true));
 	}
@@ -172,6 +174,39 @@ export class RunDetailComponent {
 		} catch (err) {
 			this.message = `failed to open code: ${err instanceof Error ? err.message : String(err)}`;
 		}
+	}
+
+	private openFinalReportFile(): void {
+		const target = this.finalReportPath();
+		if (!target) {
+			this.message = "no final report.md found";
+			return;
+		}
+		try {
+			const child = spawn("code", [target], { detached: true, stdio: "ignore" });
+			child.unref();
+			this.message = `opened final report ${relative(this.cwd, target)}`;
+		} catch (err) {
+			this.message = `failed to open code: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	private finalReportPath(): string | undefined {
+		try {
+			const workflow = loadWorkflow(resolveWorkflowFilePath(this.cwd, this.run.workflowFile));
+			const outgoing = new Set(workflow.edges.map((edge) => edge.from));
+			const finalNodeIds = workflow.nodes.filter((node) => !outgoing.has(node.id)).map((node) => node.id);
+			const runDir = dirname(this.runPath);
+			for (const nodeId of finalNodeIds) {
+				const path = join(runDir, "nodes", nodeId, "report.md");
+				if (existsSync(path)) return path;
+			}
+			for (const nodeId of Object.keys(this.run.nodes).reverse()) {
+				const path = join(runDir, "nodes", nodeId, "report.md");
+				if (existsSync(path)) return path;
+			}
+		} catch {}
+		return undefined;
 	}
 
 	private writeCombinedMultiAgentTranscript(nodeId: string, node: WorkflowNode): string | undefined {
