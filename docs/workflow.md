@@ -4,7 +4,15 @@ This extension adds spec-first workflow execution to Pi. A workflow is a JSON te
 
 ## Quick Start
 
-1. Create a spec from a workflow template:
+1. For a new task, compose a task-specific workflow/spec from the requirement:
+
+   ```text
+   /workflow:compose specs/draft-requirement.md
+   ```
+
+   This copies a compose prompt into the editor. Send it, answer clarifying questions, preview the generated workflow/spec, then confirm writing files.
+
+2. For a known template, create a spec from a workflow template:
 
    ```text
    /workflow:create
@@ -12,7 +20,7 @@ This extension adds spec-first workflow execution to Pi. A workflow is a JSON te
 
    Pick a workflow, then save the generated markdown into `specs/<name>.md`.
 
-2. Run from a spec:
+3. Run from a spec:
 
    ```text
    /workflow:run specs/<name>.md
@@ -28,13 +36,13 @@ This extension adds spec-first workflow execution to Pi. A workflow is a JSON te
    ---
    ```
 
-3. Inspect progress:
+4. Inspect progress:
 
    ```text
    /workflow:inspect
    ```
 
-4. Open the final report from inspect:
+5. Open the final report from inspect:
 
    ```text
    F
@@ -46,16 +54,41 @@ Public command set:
 
 ```text
 /workflow:help      Show this help overlay
-/workflow:create    Generate a required spec template for a workflow
+/workflow:compose   Compose a task-specific workflow/spec from a requirement
+/workflow:create    Generate a required spec template for an existing workflow
 /workflow:run       Create/resume a run and auto-start ready nodes
 /workflow:inspect   Inspect run status, node artifacts, and conversations
 /workflow:abort     Abort an active run
 /workflow:designer  Open visual workflow DAG designer
 ```
 
+### `/workflow:compose [requirement-or-path]`
+
+Starts the dynamic workflow design flow.
+
+Use it when the task should get its own workflow instead of being forced into an existing template:
+
+```text
+/workflow:compose
+/workflow:compose specs/draft-requirement.md
+/workflow:compose "Build a workflow for safely hardening process spawning"
+```
+
+The command copies a structured compose prompt into the editor. The main conversation should then:
+
+1. Summarize the requirement.
+2. Ask clarifying questions.
+3. Design a task-specific DAG.
+4. Generate a workflow JSON template and runnable spec.
+5. Preview both for confirmation.
+6. Write files only after confirmation.
+7. Validate and ask whether to run.
+
+This is the preferred flow for new non-routine tasks.
+
 ### `/workflow:create [workflow]`
 
-Creates a markdown spec template from `.pi/workflows/<workflow>.workflow.json`.
+Creates a markdown spec template from an existing `.pi/workflows/<workflow>.workflow.json`.
 
 Generated specs include:
 

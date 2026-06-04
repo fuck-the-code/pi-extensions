@@ -62,6 +62,11 @@ export function registerWorkflowCommands(pi: ExtensionAPI): void {
 		handler: showWorkflowHelp,
 	});
 
+	pi.registerCommand("workflow:compose", {
+		description: "Compose a task-specific workflow and runnable spec from a requirement",
+		handler: composeWorkflowFromRequirement,
+	});
+
 	pi.registerCommand("workflow:create", {
 		description: "Create a spec from a workflow template",
 		handler: createSpecFromWorkflow,
@@ -116,11 +121,190 @@ Docs file not found. Expected: /Users/kl/.pi/agent/extensions/docs/workflow.md
 Commands:
 
 - /workflow:help
+- /workflow:compose
 - /workflow:create
 - /workflow:run
 - /workflow:inspect
 - /workflow:abort
 - /workflow:designer
+`;
+}
+
+async function composeWorkflowFromRequirement(args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {
+	if (!ctx.hasUI) {
+		ctx.ui.notify("workflow:compose requires interactive mode", "error");
+		return;
+	}
+
+	const input = args?.trim() ?? "";
+	let sourceLabel = input ? "inline requirement" : "blank requirement";
+	let requirement = input;
+	if (input) {
+		const maybePath = isAbsolute(input) ? input : join(ctx.cwd, input);
+		if (existsSync(maybePath) && statSync(maybePath).isFile()) {
+			sourceLabel = relative(ctx.cwd, maybePath);
+			requirement = readFileSync(maybePath, "utf-8");
+		}
+	}
+
+	const prompt = buildWorkflowComposePrompt(ctx.cwd, sourceLabel, requirement);
+	ctx.ui.setEditorText(prompt);
+	ctx.ui.notify("Workflow compose prompt copied into editor. Send it to start clarifying and generating a task-specific workflow/spec.", "info");
+}
+
+function buildWorkflowComposePrompt(cwd: string, sourceLabel: string, requirement: string): string {
+	const workflows = listWorkflowNames(cwd);
+	return `# Compose a Task-Specific Pi Workflow
+
+You are helping me create a task-specific workflow for the Pi workflow extension.
+
+The goal is not to force my task into an existing workflow. The correct process is:
+
+1. Understand the requirement/spec draft.
+2. Ask clarifying questions until the task is specific enough to run.
+3. Design a task-specific workflow DAG and node contract.
+4. Convert the clarified requirement into a runnable spec for that workflow.
+5. Preview the workflow and spec for confirmation.
+6. After confirmation, write both files and validate them.
+7. Ask whether to run it; if confirmed, run with /workflow:run <spec>.
+
+## Source Requirement
+
+Source: ${sourceLabel}
+
+\`\`\`md
+${requirement || "Describe the task here, then ask me clarifying questions before generating workflow JSON."}
+\`\`\`
+
+## Existing Workflow Extension Context
+
+Docs:
+
+- ${cwd}/.pi/agent/extensions/docs/workflow.md
+
+Workflow template directory:
+
+- ${cwd}/.pi/workflows
+
+Repo workflow copies:
+
+- ${cwd}/.pi/agent/extensions/workflows
+
+Existing workflows:
+
+${workflows.map((name) => `- ${name}`).join("\n") || "- (none found)"}
+
+Useful source files:
+
+- ${cwd}/.pi/agent/extensions/workflow-designer-src/types.ts
+- ${cwd}/.pi/agent/extensions/workflow-designer-src/workflow.ts
+- ${cwd}/.pi/agent/extensions/workflow-designer-src/run.ts
+- ${cwd}/.pi/agent/extensions/workflow-designer-src/commands.ts
+
+## Conversation Rules
+
+- Start by summarizing what you understand.
+- Ask 2-4 concrete clarifying questions at a time.
+- Do not generate final workflow JSON until required decisions are clear.
+- Prefer workflow topology from task semantics, not from existing templates.
+- Use existing templates only as examples.
+- Nodes should be goal/prompt-driven.
+- Use multi-agent nodes only when one outer DAG node benefits from internal specialist phases.
+- Avoid broadcast/group-chat multi-agent design; use manager/router + shared artifacts + directed messages.
+- Treat review findings as successful outputs for review nodes; do not mark a review node failed just because it found issues.
+
+## Required Output Files After Confirmation
+
+Choose a safe workflow name, then write:
+
+1. Workflow template:
+
+   \`\`\`text
+   ${cwd}/.pi/workflows/<workflow-name>.workflow.json
+   ${cwd}/.pi/agent/extensions/workflows/<workflow-name>.workflow.json
+   \`\`\`
+
+2. Runnable spec:
+
+   \`\`\`text
+   ${cwd}/specs/<workflow-name>-<short-task>.md
+   \`\`\`
+
+The spec must declare the workflow:
+
+\`\`\`yaml
+---
+template: <template-name>
+workflow: <workflow-name>
+title: <title>
+---
+\`\`\`
+
+## Workflow JSON Requirements
+
+The workflow must include:
+
+- \`version\`
+- \`name\`
+- \`description\`
+- \`inputs.spec.template\`
+- \`inputs.spec.validation.requiredSections\`
+- \`inputs.spec.validation.forbiddenPlaceholders\`
+- \`nodes\`
+- \`edges\`
+
+Each node should include:
+
+- \`id\`
+- \`title\`
+- \`type\`
+- \`goal\`
+- \`inputs\`
+- \`outputs\`
+- \`executor\`
+- \`completionPolicy\`
+- \`verification\`
+- optional \`layout\`
+
+For multi-agent nodes, use:
+
+- \`executor.kind = "multi-agent"\`
+- \`coordinator\`
+- \`agents\`
+- \`protocol\`
+- \`phases\`
+- declared phase \`outputs\` that are safe relative paths under the node directory
+
+## Preview Before Writing
+
+Before writing files, show me:
+
+1. Workflow name and purpose.
+2. DAG as text.
+3. Node list with executor kind and verification behavior.
+4. Multi-agent clusters and phases, if any.
+5. Spec required sections.
+6. Files that will be written.
+7. Any open risks or assumptions.
+
+Ask for explicit confirmation before writing.
+
+## Validation After Writing
+
+After writing files, run:
+
+\`\`\`bash
+cd ${cwd}/.pi/agent/extensions
+PI_OFFLINE=1 pi --no-extensions -e ${cwd}/.pi/agent/extensions/workflow-designer.ts --list-models
+./scripts/workflow-smoke-test.sh
+python3 -m json.tool ${cwd}/.pi/workflows/<workflow-name>.workflow.json
+\`\`\`
+
+Then ask whether to run:
+
+\`\`\`text
+/workflow:run specs/<workflow-name>-<short-task>.md
+\`\`\`
 `;
 }
 
