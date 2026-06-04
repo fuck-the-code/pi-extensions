@@ -328,6 +328,42 @@ Nodes are goal/prompt-driven. Important node fields:
 }
 ```
 
+## Verification Model
+
+Engine-level verification is a final quality gate, not an interactive feedback loop.
+
+Current flow:
+
+```text
+work node agent
+  -> artifact check
+  -> verifier agent, if enabled
+  -> completed or needs-revision
+```
+
+The verifier runs after the node's main agent exits. It writes:
+
+```text
+verification.json
+verifier-output.md
+verifier-events.jsonl
+```
+
+If verification fails, the node becomes `needs-revision` and downstream nodes stay blocked until retry/resume.
+
+For implementation/remediation work where verifier feedback should guide fixes, prefer a multi-agent node with internal feedback phases:
+
+```text
+manager-plan
+  -> developer-implement
+  -> verifier-review
+  -> developer-fix
+  -> verifier-recheck
+  -> manager-finalize
+```
+
+Use engine-level verification after that as a final gate checking whether the whole node addressed the verifier findings. For simple deterministic/mechanical nodes, set `semanticVerification: false` to avoid unnecessary verifier cost.
+
 ## Multi-Agent Nodes
 
 A multi-agent node is one outer DAG node that internally runs multiple real Pi child agents/phases.

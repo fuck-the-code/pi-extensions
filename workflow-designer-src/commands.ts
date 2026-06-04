@@ -210,8 +210,10 @@ Useful source files:
 - Use existing templates only as examples.
 - Nodes should be goal/prompt-driven.
 - Use multi-agent nodes only when one outer DAG node benefits from internal specialist phases.
+- For implementation/remediation tasks, prefer a multi-agent internal feedback loop when verification should guide fixes: manager-plan -> developer-implement -> verifier-review -> developer-fix -> verifier-recheck -> manager-finalize.
 - Avoid broadcast/group-chat multi-agent design; use manager/router + shared artifacts + directed messages.
 - Treat review findings as successful outputs for review nodes; do not mark a review node failed just because it found issues.
+- Treat engine-level node verification as a final quality gate, not as the primary developer feedback loop. If a multi-agent node already has verifier/recheck phases, keep outer verification lightweight and focused on whether the final node report/result addressed the internal verifier findings.
 
 ## Required Output Files After Confirmation
 
@@ -265,6 +267,12 @@ Each node should include:
 - \`completionPolicy\`
 - \`verification\`
 - optional \`layout\`
+
+Verification guidance:
+
+- Single-agent work nodes usually benefit from \`semanticVerification: true\` because there is no internal reviewer.
+- Multi-agent implementation/remediation nodes should put feedback inside phases using a verifier/tester agent, then use engine-level verification only as a final gate.
+- Simple deterministic or mechanical nodes may set \`semanticVerification: false\` to avoid unnecessary verifier cost.
 
 For multi-agent nodes, use:
 
