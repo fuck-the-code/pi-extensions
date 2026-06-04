@@ -332,6 +332,27 @@ Nodes are goal/prompt-driven. Important node fields:
 
 Engine-level verification is a final quality gate, not an interactive feedback loop.
 
+Conceptually, verification is also an agent. You can define its role/responsibilities on the node:
+
+```json
+"verification": {
+  "enabled": true,
+  "mode": "semantic",
+  "agent": {
+    "id": "acceptance-verifier",
+    "role": "Acceptance criteria verifier",
+    "responsibilities": [
+      "Check whether the node output satisfies the node goal",
+      "Check acceptance criteria and required evidence",
+      "Report missing coverage and risks"
+    ]
+  },
+  "criteria": ["Final report addresses verifier findings"]
+}
+```
+
+For multi-agent implementation/remediation nodes, prefer defining verifier/tester as a normal internal agent and phase. Use the top-level `verification.agent` only as the final external gate.
+
 Current flow:
 
 ```text

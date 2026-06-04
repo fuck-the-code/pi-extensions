@@ -55,6 +55,8 @@ export interface WorkflowNodeVerification {
 	mode?: "semantic" | string;
 	criteria?: string[];
 	goal?: string;
+	prompt?: string;
+	agent?: WorkflowNodeExecutorAgent;
 	output?: { path?: string };
 }
 
