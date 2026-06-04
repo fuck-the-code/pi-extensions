@@ -38,6 +38,7 @@ import {
 	NodeEditorComponent,
 	RunDetailComponent,
 	RunListComponent,
+	WorkflowHelpComponent,
 	SpecListComponent,
 	SpecTemplatePreviewComponent,
 	WorkflowDesignerComponent,
@@ -56,6 +57,11 @@ const activeWorkflowExecutions = new Map<string, ActiveWorkflowExecution>();
 const runUpdateQueues = new Map<string, Promise<void>>();
 
 export function registerWorkflowCommands(pi: ExtensionAPI): void {
+	pi.registerCommand("workflow:help", {
+		description: "Show workflow extension usage, paths, examples, and shortcuts",
+		handler: showWorkflowHelp,
+	});
+
 	pi.registerCommand("workflow:create", {
 		description: "Create a spec from a workflow template",
 		handler: createSpecFromWorkflow,
@@ -85,6 +91,37 @@ export function registerWorkflowCommands(pi: ExtensionAPI): void {
 		for (const active of activeWorkflowExecutions.values()) active.controller.abort();
 		await Promise.allSettled(Array.from(activeWorkflowExecutions.values()).map((active) => active.promise));
 	});
+}
+
+async function showWorkflowHelp(_args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {
+	const helpPath = join(ctx.cwd, ".pi", "agent", "extensions", "docs", "workflow.md");
+	const content = existsSync(helpPath) ? readFileSync(helpPath, "utf-8") : fallbackWorkflowHelp();
+	if (!ctx.hasUI) {
+		ctx.ui.notify(`Workflow help: ${helpPath}`, "info");
+		return;
+	}
+	await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		return new WorkflowHelpComponent(tui, theme, content, done);
+	}, {
+		overlay: true,
+		overlayOptions: { anchor: "center", width: "86%", maxHeight: "90%", margin: 2 },
+	});
+}
+
+function fallbackWorkflowHelp(): string {
+	return `# Workflow Help
+
+Docs file not found. Expected: /Users/kl/.pi/agent/extensions/docs/workflow.md
+
+Commands:
+
+- /workflow:help
+- /workflow:create
+- /workflow:run
+- /workflow:inspect
+- /workflow:abort
+- /workflow:designer
+`;
 }
 
 async function openDesigner(args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {

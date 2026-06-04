@@ -377,6 +377,51 @@ export class RunDetailComponent {
 	}
 }
 
+export class WorkflowHelpComponent {
+	private scroll = 0;
+
+	constructor(
+		private tui: TUI,
+		private theme: Theme,
+		private content: string,
+		private done: (result: boolean) => void,
+	) {}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			this.done(false);
+			return;
+		}
+		if (matchesKey(data, "up")) this.scroll = Math.max(0, this.scroll - 1);
+		else if (matchesKey(data, "down")) this.scroll++;
+		else if (matchesKey(data, "pageup")) this.scroll = Math.max(0, this.scroll - 12);
+		else if (matchesKey(data, "pagedown")) this.scroll += 12;
+		else if (matchesKey(data, "home")) this.scroll = 0;
+		this.tui.requestRender();
+	}
+
+	render(width: number): string[] {
+		const outerW = Math.max(70, width);
+		const innerW = Math.max(1, outerW - 2);
+		const th = this.theme;
+		const contentLines = this.content.split("\n");
+		const visibleH = 30;
+		this.scroll = clamp(this.scroll, 0, Math.max(0, contentLines.length - visibleH));
+		const lines: string[] = [];
+		lines.push(topBorder(innerW, " Workflow Help ", th));
+		for (let i = 0; i < visibleH; i++) {
+			const line = contentLines[this.scroll + i] ?? "";
+			lines.push(sideLine(pad(truncateToWidth(line, innerW, "..."), innerW), th));
+		}
+		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
+		lines.push(sideLine(pad(" up/down scroll   |   PgUp/PgDn page   |   Home top   |   Esc close", innerW), th));
+		lines.push(bottomBorder(innerW, th));
+		return lines.map((line) => truncateToWidth(line, outerW, "", true));
+	}
+
+	invalidate(): void {}
+}
+
 export class SpecTemplatePreviewComponent {
 	private scroll = 0;
 
