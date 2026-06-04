@@ -739,6 +739,7 @@ async function executeMultiAgentNode(
 			transcriptPath: join(phaseDir, "agent-output.md"),
 		});
 		writeFileSync(join(phaseDir, "agent-output.md"), result.output, "utf-8");
+		appendSystemManagerMessage(nodeDir, phase.id, phase.agent, result.exitCode, phaseOutputs.map((artifact) => artifact.relativePath));
 		phaseSummaries.push(`## Phase: ${phase.id}\n\nAgent: ${phase.agent}\nExit: ${result.exitCode}\n\nTranscript: ${relative(ctx.cwd, join(phaseDir, "agent-output.md"))}`);
 		// Keep the parent multi-agent node transcript useful while the node is still
 		// running, so inspect/Q can open a live phase summary instead of showing no file.
@@ -766,6 +767,22 @@ async function executeMultiAgentNode(
 	return { exitCode: 0, output };
 }
 
+function appendSystemManagerMessage(nodeDir: string, phaseId: string, agentId: string, exitCode: number, outputs: string[]): void {
+	const messagePath = join(nodeDir, "messages", "system-to-manager.jsonl");
+	const message = {
+		from: "system",
+		to: "manager",
+		type: "phase-complete",
+		phase: phaseId,
+		agent: agentId,
+		exitCode,
+		outputs,
+		createdAt: new Date().toISOString(),
+		summary: `Phase ${phaseId} completed with exit code ${exitCode}`,
+	};
+	appendFileSync(messagePath, `${JSON.stringify(message)}\n`, "utf-8");
+}
+
 function summarizeExecutionFailure(result: { exitCode: number; output: string }): string {
 	const reason = result.output.match(/^Reason:\s*(.+)$/m)?.[1]
 		?? result.output.match(/^Artifact:\s*(.+)$/m)?.[1]
@@ -791,7 +808,7 @@ function buildMultiAgentPhasePrompt(
 	const parentOutputs = validateDeclaredArtifactPaths(nodeDir, "parent node output", node.outputs ?? ["result.json", "report.md"]);
 	const nodeInputs = resolveNodeInputs(cwd, node, run, runDir);
 	const phaseInputs = (phase.inputs ?? []).map((input) => resolveMultiAgentPhasePath(cwd, run, nodeDir, input));
-	return `# Multi-Agent Workflow Node Phase\n\nYou are executing one real Pi sub-agent phase inside a multi-agent workflow node.\n\nThis is not a broadcast chat. Only do the work assigned to your phase. Communicate by writing explicit artifacts/messages.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Phase\n\nID: ${phase.id}\nAgent: ${phase.agent}\nRole: ${agent?.role ?? phase.agent}\nGoal: ${phase.goal ?? phase.prompt ?? "Complete this phase."}\nPrompt: ${phase.prompt ?? phase.goal ?? "Complete this phase."}\nTriggered by: ${phase.triggeredBy ?? "workflow engine"}\n\n## Agent Responsibilities\n\n${(agent?.responsibilities ?? []).map((item) => `- ${item}`).join("\n") || "- Follow the phase prompt."}\n\n## Protocol\n\n- Coordinator: ${executor?.coordinator ?? "manager"}\n- Mode: ${executor?.protocol?.mode ?? "managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Agents do not respond unless explicitly assigned a task by the coordinator."}\n- Shared artifacts directory: ${relative(cwd, sharedDir.absolutePath)}\n- Messages directory: ${relative(cwd, messagesDir.absolutePath)}\n\n## Available Inputs\n\n${[...nodeInputs, ...phaseInputs].map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Phase Outputs\n\n${phaseOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n") || "- Write useful phase artifacts under shared/ or messages/."}\n\n## Finalization Rule\n\nOnly the coordinator/finalize phase should write the parent node's result.json and report.md. If this phase is not finalization, do not mark the parent node complete.\n\nParent node final required outputs:\n${parentOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n")}\n\n## Important\n\n- Do not modify workflow topology or run.json.\n- Do not broadcast requests to all agents. Address messages to a specific next agent/coordinator.\n- If you need to pass work to another agent, write a JSONL message in messages/ with from/to/type/artifact/summary.\n- Keep artifacts concise and actionable.\n`;
+	return `# Multi-Agent Workflow Node Phase\n\nYou are executing one real Pi sub-agent phase inside a multi-agent workflow node.\n\nThis is not a broadcast chat. Only do the work assigned to your phase. Communicate by writing explicit artifacts/messages.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Phase\n\nID: ${phase.id}\nAgent: ${phase.agent}\nRole: ${agent?.role ?? phase.agent}\nGoal: ${phase.goal ?? phase.prompt ?? "Complete this phase."}\nPrompt: ${phase.prompt ?? phase.goal ?? "Complete this phase."}\nTriggered by: ${phase.triggeredBy ?? "workflow engine"}\n\n## Agent Responsibilities\n\n${(agent?.responsibilities ?? []).map((item) => `- ${item}`).join("\n") || "- Follow the phase prompt."}\n\n## Protocol\n\n- Coordinator: ${executor?.coordinator ?? "manager"}\n- Mode: ${executor?.protocol?.mode ?? "managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Agents do not respond unless explicitly assigned a task by the coordinator."}\n- Shared artifacts directory: ${relative(cwd, sharedDir.absolutePath)}\n- Messages directory: ${relative(cwd, messagesDir.absolutePath)}\n\n## Available Inputs\n\n${[...nodeInputs, ...phaseInputs].map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Phase Outputs\n\n${phaseOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n") || "- Write useful phase artifacts under shared/ or messages/."}\n\n## Finalization Rule\n\nOnly the coordinator/finalize phase should write the parent node's result.json and report.md. If this phase is not finalization, do not mark the parent node complete.\n\nParent node final required outputs:\n${parentOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n")}\n\n## Important\n\n- Do not modify workflow topology or run.json.\n- Do not broadcast requests to all agents. Address messages to a specific next agent/coordinator.\n- If you need to pass work to another agent, write a JSONL message in messages/ with from/to/type/artifact/summary.\n- The workflow engine also appends phase completion notices to messages/system-to-manager.jsonl; use those for objective execution status.\n- Keep artifacts concise and actionable.\n`;
 }
 
 function resolveMultiAgentPhasePath(cwd: string, run: WorkflowRun, nodeDir: string, value: string): string {

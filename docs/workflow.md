@@ -421,6 +421,7 @@ Rules:
 - Agents communicate through `shared/` artifacts and directed `messages/*.jsonl`.
 - Declared phase outputs must exist, be regular files, and be non-empty before later phases continue.
 - Final/coordinator phase writes parent node `result.json` and `report.md`.
+- The engine automatically appends phase completion notices to `messages/system-to-manager.jsonl`; agent-authored handoff messages are still useful for task-specific context.
 
 ## Validation Commands
 
