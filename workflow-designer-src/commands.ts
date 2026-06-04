@@ -149,7 +149,7 @@ async function composeWorkflowFromRequirement(args: string | undefined, ctx: Ext
 
 	const prompt = buildWorkflowComposePrompt(ctx.cwd, sourceLabel, requirement);
 	ctx.ui.setEditorText(prompt);
-	ctx.ui.notify("Workflow compose prompt copied into editor. Send it to start clarifying and generating a task-specific workflow/spec.", "info");
+	ctx.ui.notify("Workflow compose prompt copied into editor. Send it as-is; the assistant will ask for the requirement and clarifying details in chat.", "info");
 }
 
 function buildWorkflowComposePrompt(cwd: string, sourceLabel: string, requirement: string): string {
@@ -173,7 +173,7 @@ The goal is not to force my task into an existing workflow. The correct process 
 Source: ${sourceLabel}
 
 \`\`\`md
-${requirement || "Describe the task here, then ask me clarifying questions before generating workflow JSON."}
+${requirement || "No requirement provided yet. Ask me to describe the task, then continue with clarifying questions before generating workflow JSON."}
 \`\`\`
 
 ## Existing Workflow Extension Context

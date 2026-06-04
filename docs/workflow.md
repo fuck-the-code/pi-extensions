@@ -10,7 +10,7 @@ This extension adds spec-first workflow execution to Pi. A workflow is a JSON te
    /workflow:compose specs/draft-requirement.md
    ```
 
-   This copies a compose prompt into the editor. Send it, answer clarifying questions, preview the generated workflow/spec, then confirm writing files.
+   This copies a fixed compose prompt into the editor. Send it as-is; the assistant will ask for the requirement and clarifying questions in chat, then preview the generated workflow/spec before writing files.
 
 2. For a known template, create a spec from a workflow template:
 
@@ -74,7 +74,7 @@ Use it when the task should get its own workflow instead of being forced into an
 /workflow:compose "Build a workflow for safely hardening process spawning"
 ```
 
-The command copies a structured compose prompt into the editor. The main conversation should then:
+The command copies a structured compose prompt into the editor. Send the prompt as-is; do not edit it manually unless you want to. The main conversation should then:
 
 1. Summarize the requirement.
 2. Ask clarifying questions.
