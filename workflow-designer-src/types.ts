@@ -139,6 +139,7 @@ export interface WorkflowRunNodeState {
 
 export interface WorkflowRun {
 	runId: string;
+	alias?: string;
 	workflow: string;
 	workflowFile: string;
 	status: "created" | "running" | "paused" | "completed" | "failed" | "aborted";

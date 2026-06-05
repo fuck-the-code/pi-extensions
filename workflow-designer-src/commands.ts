@@ -1,5 +1,5 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeExecutorPhase, WorkflowRun } from "./types";
 import {
@@ -435,9 +435,10 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 		return;
 	}
 
-	const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
-	let workflowName = parts[0];
-	let specPath = parts[1];
+	const parsedArgs = parseRunArgs(args);
+	let workflowName = parsedArgs.positionals[0];
+	let specPath = parsedArgs.positionals[1];
+	let runAlias = parsedArgs.alias;
 
 	if (workflowName) {
 		try {
@@ -507,8 +508,11 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 	const copiedSpec = join(inputsDir, "spec.md");
 	copyFileSync(absSpecPath, copiedSpec);
 
+	if (!runAlias) runAlias = defaultRunAlias(absSpecPath, workflow.name);
+
 	const run: WorkflowRun = {
 		runId,
+		alias: runAlias,
 		workflow: workflow.name,
 		workflowFile: relative(ctx.cwd, workflowPath),
 		status: "created",
@@ -522,6 +526,39 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 	writeFileSync(runPath, `${JSON.stringify(run, null, "\t")}\n`, "utf-8");
 	ctx.ui.notify(`Created workflow run: ${relative(ctx.cwd, runPath)}. Starting auto-run...`, "info");
 	await startWorkflowRun(runPath, ctx);
+}
+
+function parseRunArgs(args: string | undefined): { alias?: string; positionals: string[] } {
+	const tokens = (args ?? "").trim().split(/\s+/).filter(Boolean);
+	const positionals: string[] = [];
+	let alias: string | undefined;
+	for (let index = 0; index < tokens.length; index += 1) {
+		const token = tokens[index]!;
+		if (token === "--alias" || token === "-a") {
+			const value = tokens[index + 1];
+			if (value) {
+				alias = sanitizeRunAlias(value);
+				index += 1;
+			}
+			continue;
+		}
+		if (token.startsWith("--alias=")) {
+			alias = sanitizeRunAlias(token.slice("--alias=".length));
+			continue;
+		}
+		positionals.push(token);
+	}
+	return { alias, positionals };
+}
+
+function sanitizeRunAlias(value: string): string | undefined {
+	const trimmed = value.trim().replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ");
+	return trimmed ? trimmed.slice(0, 80) : undefined;
+}
+
+function defaultRunAlias(specPath: string, workflowName: string): string {
+	const specName = basename(specPath).replace(/\.[^.]+$/, "");
+	return `${workflowName}: ${specName}`.slice(0, 80);
 }
 
 function createUniqueRunDirectory(cwd: string, workflowName: string, specPath: string): { runId: string; runDir: string } {

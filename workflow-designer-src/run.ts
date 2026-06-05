@@ -313,7 +313,12 @@ export function listRuns(cwd: string): Array<{ path: string; run: WorkflowRun; m
 			}
 		})
 		.filter((item): item is { path: string; run: WorkflowRun; mtimeMs: number } => item !== null)
-		.sort((a, b) => b.mtimeMs - a.mtimeMs);
+		.sort((a, b) => runCreatedAtMs(b.run) - runCreatedAtMs(a.run) || b.mtimeMs - a.mtimeMs);
+}
+
+export function runCreatedAtMs(run: WorkflowRun): number {
+	const parsed = Date.parse(run.createdAt);
+	return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function refreshReadyStates(run: WorkflowRun, workflow: WorkflowDefinition): void {

@@ -53,7 +53,9 @@ export class RunListComponent {
 				return acc;
 			}, {});
 			const statusSummary = Object.entries(counts).map(([status, count]) => `${status}:${count}`).join(" ");
-			const raw = ` ${selected ? ">" : " "} ${item.run.runId} [${item.run.status}] ${statusSummary}`;
+			const created = item.run.createdAt ? item.run.createdAt.replace("T", " ").replace(/\.\d+Z$/, "Z") : "unknown-created";
+			const label = item.run.alias ? `${item.run.alias} (${item.run.runId})` : item.run.runId;
+			const raw = ` ${selected ? ">" : " "} ${created} ${label} [${item.run.status}] ${statusSummary}`;
 			lines.push(sideLine(padAnsi(selected ? th.fg("accent", raw) : raw, innerW), th));
 		}
 		if (this.runs.length === 0) lines.push(sideLine(pad(" No runs.", innerW), th));
@@ -123,8 +125,8 @@ export class RunDetailComponent {
 		const rightW = innerW - leftW - 1;
 		const bodyH = 22;
 
-		lines.push(topBorder(innerW, ` Workflow Run: ${this.run.runId} `, th));
-		lines.push(sideLine(pad(` Status: ${this.run.status} | Workflow: ${this.run.workflow} | File: ${relative(this.cwd, this.runPath)}`, innerW), th));
+		lines.push(topBorder(innerW, ` Workflow Run: ${this.run.alias ? `${this.run.alias} (${this.run.runId})` : this.run.runId} `, th));
+		lines.push(sideLine(pad(` Status: ${this.run.status} | Workflow: ${this.run.workflow} | Created: ${this.run.createdAt} | File: ${relative(this.cwd, this.runPath)}`, innerW), th));
 		lines.push(sideLine(pad(` Spec: ${this.run.inputs.spec} | Original: ${this.run.originalInputs.spec ?? ""}`, innerW), th));
 		lines.push(sideLine("-".repeat(innerW), th, "+", "+"));
 

@@ -128,6 +128,15 @@ Spec-only mode:
 /workflow:run specs/workflow-extension-code-review.md
 ```
 
+Set a run alias shown in inspect/history:
+
+```text
+/workflow:run specs/workflow-extension-code-review.md --alias review-hardening
+/workflow:run code-review specs/workflow-extension-code-review.md --alias review-hardening
+```
+
+If no alias is provided, one is generated from workflow name and spec filename.
+
 The spec must declare:
 
 ```yaml
@@ -144,6 +153,8 @@ Resume an existing run:
 ### `/workflow:inspect`
 
 Shows run status, node status, artifacts, verification info, and conversations.
+
+Run history is sorted by `createdAt` descending. Updating, retrying, or reconciling an older run does not move it to the top. Run aliases, when present, are shown next to the run ID.
 
 Shortcuts:
 
