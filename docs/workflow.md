@@ -2,6 +2,13 @@
 
 This extension adds spec-first workflow execution to Pi. A workflow is a JSON template containing a DAG of goal-driven nodes. A run copies a spec into `.workflow/runs/<runId>/`, starts ready nodes in background Pi sub-agents, and stores all node artifacts for inspection and retry.
 
+Design notes:
+
+```text
+docs/spec-to-design-workflow.md
+```
+
+
 ## Quick Start
 
 1. For a new task, compose a task-specific workflow/spec from the requirement:

@@ -1,0 +1,855 @@
+{
+	"version": 1,
+	"name": "spec-to-design",
+	"description": "Turn a rough backend-service requirement into a repo-aware engineering design package, Spec Kit-style spec/plan/tasks outputs, project experience notes, open questions, and a readiness gate. This workflow is a Pi workflow extension template, not a GitHub Spec Kit command.",
+	"inputs": {
+		"spec": {
+			"type": "file",
+			"required": true,
+			"template": "spec-to-design-spec-v1",
+			"validation": {
+				"requiredSections": [
+					"Raw Requirement",
+					"Refined Backend Requirement",
+					"Target Project",
+					"Desired Outcome",
+					"Out of Scope",
+					"User Scenarios & Testing",
+					"Requirements",
+					"Key Entities",
+					"Backend-Specific Concerns",
+					"Project Experience Checklist",
+					"Edge Cases & Failure Handling",
+					"Success Criteria",
+					"Known Constraints",
+					"Assumptions",
+					"Current Questions",
+					"Spec Quality Checklist"
+				],
+				"forbiddenPlaceholders": [
+					"TODO",
+					"TBD",
+					"<fill me>"
+				]
+			}
+		}
+	},
+	"nodes": [
+		{
+			"id": "spec-intake",
+			"title": "Spec Intake",
+			"type": "analysis",
+			"goal": "Normalize the rough backend requirement into a concise design-ready requirement and identify immediate gaps without doing implementation design.",
+			"inputs": [
+				"{{inputs.spec}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the spec-to-design input spec. This is a Pi workflow extension spec, not a GitHub Spec Kit command. Extract raw requirement, refined backend requirement, target project path, desired outcome, out of scope, constraints, assumptions, and current questions. Validate whether the spec is coherent enough for repo-aware design. Produce report.md with: normalized requirement, scope summary, explicit non-goals, high-impact unresolved questions, and what downstream nodes must preserve. Do not implement code and do not write final design package files. Write result.json with status completed unless the input cannot be read or lacks enough information to continue.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Uses the input spec as source of truth",
+					"Normalizes requirement, scope, constraints, assumptions, and questions",
+					"Does not perform implementation work",
+					"Identifies what downstream design nodes must preserve"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 4,
+				"y": 8,
+				"width": 34
+			}
+		},
+		{
+			"id": "project-profile",
+			"title": "Project Profile",
+			"type": "analysis",
+			"goal": "Identify the project type, technology stack, repository style, and backend-service capabilities relevant to design package selection.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.spec-intake.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"profile/project-profile.json",
+				"profile/project-structure.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the spec and intake report. Determine projectPath from frontmatter or Target Project. Inspect only enough repository structure to identify project type and backend capabilities. For a gpt-proxy-like Go backend, look for app/api/controller, app/api/router, app/api/service, app/api/payload, app/api/conf, dao, dao/migrations, models, middle, constant, dashboards, docs, tests, and pkg/testutil. Write profile/project-profile.json with projectType, language, repositoryStyle, hasDatabase, hasMigrations, hasRedis, hasStreaming, hasAuth, hasRateLimit, hasUsageMetering, hasProviderRouting, hasObservability, designPackage. Write profile/project-structure.md with evidence paths. Write report.md summarizing the profile and evidence. Do not modify code.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Identifies project path or clearly states fallback",
+					"Classifies the project and backend-service capabilities",
+					"Writes project-profile.json and project-structure.md",
+					"Uses concrete repository evidence"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 48,
+				"y": 8,
+				"width": 34
+			}
+		},
+		{
+			"id": "context-discovery",
+			"title": "Context Discovery",
+			"type": "analysis",
+			"goal": "Discover repository context, similar flows, and evidence paths relevant to the backend requirement without changing code.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.spec-intake.outputs.report}}",
+				"{{nodes.project-profile.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"context/relevant-files.md",
+				"context/existing-flows.md",
+				"context/similar-implementations.md",
+				"context/current-architecture-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the spec, intake report, and project profile. Inspect the target repository for files and flows relevant to the requested backend change. For gpt-proxy-like projects, trace router -> controller -> service -> provider/model mapping -> DAO/models/migrations -> metrics/dashboards/tests where applicable. Write context/relevant-files.md with file paths and why they matter, context/existing-flows.md with request/data/control flows, context/similar-implementations.md with comparable provider/model/modality implementations, and context/current-architecture-notes.md with architecture observations. Write report.md summarizing discovery. Do not modify code.",
+				"timeoutSec": 2400
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Discovers concrete relevant files and flows",
+					"Identifies similar implementations where available",
+					"Records evidence paths",
+					"Does not modify code"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 92,
+				"y": 8,
+				"width": 36
+			}
+		},
+		{
+			"id": "project-experience-extraction",
+			"title": "Project Experience Extraction",
+			"type": "analysis",
+			"goal": "Extract project-specific scenario knowledge and hidden backend checklist items that must influence design.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.spec-intake.outputs.report}}",
+				"{{nodes.project-profile.outputs.report}}",
+				"{{nodes.context-discovery.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"knowledge/project-experience-and-domain-checklist.md",
+				"knowledge/scenario-risk-matrix.md",
+				"knowledge/reusable-design-rules.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the spec and upstream reports. Extract what this project usually requires for this category of backend change. For gpt-proxy-like provider/model/modality changes, ensure the checklist considers constants/config, router/controller/service/provider flow, payload structs, app key/provider key selection, quota/rate limit, usage records, deduction/charge rules, hourly/daily billing summary, metrics/dashboards/alerts, error mapping, retry/fallback, migration/backfill, tests and fixtures. Write knowledge/project-experience-and-domain-checklist.md, knowledge/scenario-risk-matrix.md, knowledge/reusable-design-rules.md, and report.md. Distinguish verified evidence from assumptions. Do not modify code.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Extracts project-specific scenario experience",
+					"Covers hidden backend concerns like billing, summary, observability, and rollout",
+					"Distinguishes verified evidence from assumptions",
+					"Produces reusable rules and risk matrix"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 136,
+				"y": 8,
+				"width": 40
+			}
+		},
+		{
+			"id": "api-contract-design",
+			"title": "API Contract Design",
+			"type": "design",
+			"goal": "Design backend API contract behavior, request/response shape, errors, streaming behavior, and compatibility impact.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"design/api-contract-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Design the API contract aspect only. Use the spec, context discovery, and project experience checklist. Cover endpoints, headers, request body, response body, error contract, streaming/SSE behavior, idempotency, compatibility, and example requests. For each unclear decision, record assumption or open question. Write design/api-contract-notes.md and report.md. Do not design unrelated data/model internals except where they affect API contract.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers API request/response/error/streaming compatibility",
+					"Uses project context and experience checklist",
+					"Records assumptions or open questions",
+					"Stays focused on API contract design"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 4,
+				"y": 34,
+				"width": 36
+			}
+		},
+		{
+			"id": "service-architecture-design",
+			"title": "Service Architecture Design",
+			"type": "design",
+			"goal": "Design controller/router/service/provider adapter boundaries and backend call flow for the requirement.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"design/service-architecture-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Design service architecture only. Use the spec, context discovery, and project experience checklist. Cover routing entry point, controller responsibilities, service responsibilities, provider/model mapping, provider adapter boundaries, dependency/config injection, compatibility with existing package structure, and likely file-level touch points. Write design/service-architecture-notes.md and report.md. Do not design detailed DB migrations except references needed for service boundaries.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers router/controller/service/provider boundaries",
+					"Identifies likely file-level touch points",
+					"Uses context and project experience checklist",
+					"Stays focused on service architecture"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 48,
+				"y": 34,
+				"width": 38
+			}
+		},
+		{
+			"id": "data-model-design",
+			"title": "Data Model Design",
+			"type": "design",
+			"goal": "Design entities, models, DAO, migrations, indexes, summaries, backfill, and consistency requirements.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"design/data-model-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Design the data/model/storage aspect only. Use the spec, context discovery, and project experience checklist. Cover key entities, existing tables/models/DAO, new or changed tables/fields, indexes, migrations, backfill, data consistency, usage records, summary tables, and rollback implications. If no schema change is needed, state why with evidence. Write design/data-model-notes.md and report.md.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers models/DAO/migrations/indexes/backfill where applicable",
+					"Addresses usage records and summary implications for gpt-proxy-like projects",
+					"States no-change rationale when no data change is needed",
+					"Uses evidence from context discovery"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 94,
+				"y": 34,
+				"width": 36
+			}
+		},
+		{
+			"id": "auth-quota-observability-design",
+			"title": "Auth Quota Observability Design",
+			"type": "design",
+			"goal": "Design auth/key/tenant scope, quota/rate limit, usage metering, billing summary, metrics, dashboards, and alerts.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"design/auth-quota-observability-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Design auth, quota, billing, and observability concerns only. Use the spec, context discovery, and project experience checklist. Cover app key/provider key selection, user/team/tenant scope, admin permissions, quota/rate limit, usage metering, deduction/charge rules, hourly/daily billing summary, reconciliation/refund concerns, logs, metrics, traces, dashboards, alert rules, and sensitive data redaction. Write design/auth-quota-observability-notes.md and report.md.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers auth/key/tenant and permission implications",
+					"Covers quota/rate limit/usage/billing summary implications",
+					"Covers logs/metrics/dashboards/alerts",
+					"Uses project-specific experience checklist"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 138,
+				"y": 34,
+				"width": 42
+			}
+		},
+		{
+			"id": "reliability-performance-security-design",
+			"title": "Reliability Performance Security Design",
+			"type": "design",
+			"goal": "Design timeout/retry/fallback/error mapping, performance/capacity, security, privacy, and abuse-prevention concerns.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"design/reliability-performance-security-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Design reliability, performance, and security concerns only. Use the spec, context discovery, and project experience checklist. Cover timeout policy, retryable/non-retryable errors, fallback/circuit breaker, provider error mapping, streaming failure behavior, expected QPS/latency/concurrency, DB write volume, hot paths, load test needs, secret handling, sensitive logs, data retention, PII/media risks, SSRF/abuse risks, and compliance notes if relevant. Write design/reliability-performance-security-notes.md and report.md.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers timeout/retry/fallback/error mapping",
+					"Covers performance and capacity implications",
+					"Covers security/privacy/abuse concerns",
+					"Records assumptions and open questions"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 188,
+				"y": 34,
+				"width": 44
+			}
+		},
+		{
+			"id": "test-strategy-design",
+			"title": "Test Strategy Design",
+			"type": "design",
+			"goal": "Design a backend test strategy mapped to real project paths and independently testable user stories.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"design/test-strategy-notes.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Design test strategy only. Use the spec, context discovery, and project experience checklist. Cover unit tests, integration tests, DAO tests, contract tests, provider stub tests, streaming tests, migration tests, regression cases, load/soak tests, fixtures, and how tests map to user stories and concrete repository paths. Write design/test-strategy-notes.md and report.md.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Covers major backend test categories",
+					"Maps tests to user stories or acceptance criteria",
+					"Uses concrete project paths where possible",
+					"Addresses provider/model/modality regression risks"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 240,
+				"y": 34,
+				"width": 38
+			}
+		},
+		{
+			"id": "design-package-synthesis",
+			"title": "Design Package Synthesis",
+			"type": "synthesis",
+			"goal": "Synthesize upstream analysis and parallel design notes into a complete backend design package and Spec Kit-compatible spec/plan/tasks outputs.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.spec-intake.outputs.report}}",
+				"{{nodes.project-profile.outputs.report}}",
+				"{{nodes.context-discovery.outputs.report}}",
+				"{{nodes.project-experience-extraction.outputs.report}}",
+				"{{nodes.api-contract-design.outputs.report}}",
+				"{{nodes.service-architecture-design.outputs.report}}",
+				"{{nodes.data-model-design.outputs.report}}",
+				"{{nodes.auth-quota-observability-design.outputs.report}}",
+				"{{nodes.reliability-performance-security-design.outputs.report}}",
+				"{{nodes.test-strategy-design.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"backend-design/spec/01-refined-backend-spec.md",
+				"backend-design/spec/02-user-scenarios-and-acceptance.md",
+				"backend-design/spec/03-assumptions-and-clarifications.md",
+				"backend-design/plan/04-technical-context.md",
+				"backend-design/plan/05-existing-system-context.md",
+				"backend-design/plan/06-api-contract.md",
+				"backend-design/plan/07-request-routing-and-provider-flow.md",
+				"backend-design/plan/08-service-layer-design.md",
+				"backend-design/plan/09-data-model-and-migration.md",
+				"backend-design/plan/10-auth-permission-and-tenant-scope.md",
+				"backend-design/plan/11-rate-limit-quota-and-billing.md",
+				"backend-design/plan/12-observability-logging-metrics-alerts.md",
+				"backend-design/plan/13-error-handling-and-retry-policy.md",
+				"backend-design/plan/14-performance-and-capacity.md",
+				"backend-design/plan/15-security-and-privacy.md",
+				"backend-design/plan/16-rollout-backfill-and-compatibility.md",
+				"backend-design/plan/17-test-strategy.md",
+				"backend-design/tasks/18-implementation-plan.md",
+				"backend-design/tasks/19-implementation-tasks.md",
+				"backend-design/knowledge/20-project-experience-and-domain-checklist.md",
+				"backend-design/knowledge/21-scenario-risk-matrix.md",
+				"backend-design/review/24-assumption-validation.md",
+				"backend-design/review/25-open-questions.md",
+				"speckit-compatible/spec.md",
+				"speckit-compatible/plan.md",
+				"speckit-compatible/tasks.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Synthesize a complete backend design package. Read the spec and all upstream reports. Write every required output path exactly. The backend-design package must use spec/plan/tasks/knowledge/review structure. Ensure the package reflects project-specific experience such as provider/model constants, routing, usage records, deduction, billing summaries, observability, rollout, and tests when applicable. The implementation tasks must use Spec Kit-style task IDs, [P] parallel markers, [USx] story labels, dependency-aware phases, and concrete file paths when possible. Also write speckit-compatible/spec.md, plan.md, and tasks.md as compatibility outputs. Write backend-design/review/24-assumption-validation.md and backend-design/review/25-open-questions.md as initial drafts; downstream nodes will validate/refine them. Write report.md summarizing generated package and result.json with status completed unless synthesis cannot be done.",
+				"timeoutSec": 3600
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Writes all required backend-design and speckit-compatible outputs",
+					"Integrates all parallel design notes and project experience",
+					"Implementation tasks are concrete, traceable, and file-path aware",
+					"Open questions and assumptions are explicit"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 116,
+				"y": 62,
+				"width": 44
+			}
+		},
+		{
+			"id": "spec-quality-gate",
+			"title": "Spec Quality Gate",
+			"type": "verification",
+			"goal": "Evaluate the refined spec/package using Spec Kit-inspired quality criteria and backend-specific readiness checks.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.design-package-synthesis.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"review/spec-quality-checklist.md",
+				"review/spec-quality-issues.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Evaluate the synthesized backend design package and original/refined spec. Use Spec Kit-inspired quality criteria: what/why focus, mandatory sections completed, requirements testable/unambiguous, success criteria measurable, acceptance scenarios defined, edge cases identified, scope bounded, dependencies/assumptions documented, no more than 3 high-impact NEEDS CLARIFICATION markers unless justified. Also check backend readiness: API, data/migration, auth/quota/billing, observability/reliability/security, rollout/testing. Write review/spec-quality-checklist.md with pass/fail checkboxes and evidence, review/spec-quality-issues.md with actionable issues, report.md summary, result.json completed. Quality gaps are findings, not execution failure.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Evaluates Spec Kit-style spec quality criteria",
+					"Evaluates backend-specific concerns",
+					"Produces checklist and issues artifacts",
+					"Treats quality findings as successful analysis"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 48,
+				"y": 88,
+				"width": 36
+			}
+		},
+		{
+			"id": "assumption-validation",
+			"title": "Assumption Validation",
+			"type": "analysis",
+			"goal": "Validate assumptions from the design package against repository evidence and produce final open questions.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.design-package-synthesis.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"review/assumption-validation.md",
+				"review/open-questions-draft.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the synthesized package summary and relevant artifacts if needed. Validate assumptions using repository evidence where possible. Classify assumptions as verified, false, partially-true, unclear, or not-verifiable. Produce review/assumption-validation.md with evidence, risk, recommendation, and applicability boundaries. Produce review/open-questions-draft.md with only questions that need user input and include why each matters, options, recommended default, and current assumption. Write report.md and result.json completed. Unresolved questions are successful output, not failure.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Classifies assumptions with evidence or explicit non-verifiability",
+					"Produces prioritized open questions with implications",
+					"Does not treat unresolved questions as execution failure",
+					"Uses repository/design evidence"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 116,
+				"y": 88,
+				"width": 38
+			}
+		},
+		{
+			"id": "experience-capture",
+			"title": "Experience Capture",
+			"type": "synthesis",
+			"goal": "Capture reusable project lessons and future workflow hints from the final design package without automatically modifying project/global knowledge.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.design-package-synthesis.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"knowledge/final-project-lessons.md",
+				"knowledge/future-workflow-hints.md",
+				"knowledge/update-candidates.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the final synthesized design package and upstream project experience. Capture reusable project lessons discovered by this run. Distinguish project-wide rules, scenario-specific lessons, and one-off assumptions. Do not turn unverified assumptions into rules. For each lesson include evidence and applicability boundary. Write knowledge/final-project-lessons.md, knowledge/future-workflow-hints.md, knowledge/update-candidates.md, report.md, and result.json. update-candidates.md should propose possible updates to docs/project-playbook.md, .workflow/knowledge/<project>.md, or AGENTS.md, but do not modify those files.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Captures reusable lessons with evidence",
+					"Distinguishes verified rules from assumptions",
+					"Provides future workflow hints and update candidates",
+					"Does not modify project/global knowledge automatically"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 186,
+				"y": 88,
+				"width": 38
+			}
+		},
+		{
+			"id": "readiness-gate",
+			"title": "Readiness Gate",
+			"type": "verification",
+			"goal": "Produce the final readiness report and next action from the design package, quality gate, assumptions, and captured experience.",
+			"inputs": [
+				"{{inputs.spec}}",
+				"{{nodes.design-package-synthesis.outputs.report}}",
+				"{{nodes.spec-quality-gate.outputs.report}}",
+				"{{nodes.assumption-validation.outputs.report}}",
+				"{{nodes.experience-capture.outputs.report}}"
+			],
+			"outputs": [
+				"result.json",
+				"report.md",
+				"readiness/readiness-summary.md",
+				"readiness/next-action.md"
+			],
+			"executor": {
+				"kind": "agent",
+				"prompt": "Read the design package synthesis report, spec-quality gate report, assumption validation report, and experience capture report. Produce the final readiness decision. Write readiness/readiness-summary.md with verdict ready yes/partial/no, canImplementNow, blockedBy, high-risk assumptions, open questions, recommended next action, and whether to run backend-spec-refine again. Write readiness/next-action.md with concrete next commands or manual steps. Write report.md as the final sink report for inspect shortcut F. Write result.json with status completed if the readiness conclusion is explicit, even when readiness is no or partial. Use needs-revision only if required package artifacts are incomplete or contradictory.",
+				"timeoutSec": 1800
+			},
+			"completionPolicy": {
+				"artifactCheck": true,
+				"semanticVerification": true,
+				"needsRevisionBlocks": false,
+				"findingsAreSuccess": true,
+				"failedBlocks": true
+			},
+			"verification": {
+				"enabled": true,
+				"mode": "semantic",
+				"criteria": [
+					"Produces explicit ready yes/partial/no verdict",
+					"Distinguishes workflow completion from implementation readiness",
+					"Lists blockers, open questions, assumptions, and next action",
+					"Writes final report.md, readiness summary, and next-action artifacts"
+				],
+				"output": {
+					"path": "verification.json"
+				}
+			},
+			"layout": {
+				"x": 116,
+				"y": 114,
+				"width": 38
+			}
+		}
+	],
+	"edges": [
+		{
+			"from": "spec-intake",
+			"to": "project-profile"
+		},
+		{
+			"from": "project-profile",
+			"to": "context-discovery"
+		},
+		{
+			"from": "context-discovery",
+			"to": "project-experience-extraction"
+		},
+		{
+			"from": "project-experience-extraction",
+			"to": "api-contract-design"
+		},
+		{
+			"from": "project-experience-extraction",
+			"to": "service-architecture-design"
+		},
+		{
+			"from": "project-experience-extraction",
+			"to": "data-model-design"
+		},
+		{
+			"from": "project-experience-extraction",
+			"to": "auth-quota-observability-design"
+		},
+		{
+			"from": "project-experience-extraction",
+			"to": "reliability-performance-security-design"
+		},
+		{
+			"from": "project-experience-extraction",
+			"to": "test-strategy-design"
+		},
+		{
+			"from": "api-contract-design",
+			"to": "design-package-synthesis"
+		},
+		{
+			"from": "service-architecture-design",
+			"to": "design-package-synthesis"
+		},
+		{
+			"from": "data-model-design",
+			"to": "design-package-synthesis"
+		},
+		{
+			"from": "auth-quota-observability-design",
+			"to": "design-package-synthesis"
+		},
+		{
+			"from": "reliability-performance-security-design",
+			"to": "design-package-synthesis"
+		},
+		{
+			"from": "test-strategy-design",
+			"to": "design-package-synthesis"
+		},
+		{
+			"from": "design-package-synthesis",
+			"to": "spec-quality-gate"
+		},
+		{
+			"from": "design-package-synthesis",
+			"to": "assumption-validation"
+		},
+		{
+			"from": "design-package-synthesis",
+			"to": "experience-capture"
+		},
+		{
+			"from": "spec-quality-gate",
+			"to": "readiness-gate"
+		},
+		{
+			"from": "assumption-validation",
+			"to": "readiness-gate"
+		},
+		{
+			"from": "experience-capture",
+			"to": "readiness-gate"
+		}
+	]
+}
