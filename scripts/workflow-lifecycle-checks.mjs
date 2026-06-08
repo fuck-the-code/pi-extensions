@@ -145,6 +145,10 @@ function testLifecycleSourceInvariants() {
     && !commands.includes('function defaultRunAlias('),
     'new workflow runs must require an explicit alias and must not auto-generate one');
 
+  assert(commands.includes('workflow:compose is deprecated')
+    && !commands.includes('function buildWorkflowComposePrompt('),
+    'workflow:compose should remain a deprecated stub, not own workflow-authoring prompt rules');
+
   assert(reconcile.includes('if (run.status === "aborted") return run;'),
     'aborted runs must be final during artifact reconciliation');
 

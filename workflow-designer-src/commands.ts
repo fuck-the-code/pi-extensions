@@ -63,8 +63,8 @@ export function registerWorkflowCommands(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("workflow:compose", {
-		description: "Compose a task-specific workflow and runnable spec from a requirement",
-		handler: composeWorkflowFromRequirement,
+		description: "Deprecated. Ask the assistant to author a task-specific workflow/spec directly.",
+		handler: deprecatedComposeWorkflow,
 	});
 
 	pi.registerCommand("workflow:create", {
@@ -121,7 +121,6 @@ Docs file not found. Expected: /Users/kl/.pi/agent/extensions/docs/workflow.md
 Commands:
 
 - /workflow:help
-- /workflow:compose
 - /workflow:create
 - /workflow:run
 - /workflow:inspect
@@ -130,192 +129,10 @@ Commands:
 `;
 }
 
-async function composeWorkflowFromRequirement(args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {
-	if (!ctx.hasUI) {
-		ctx.ui.notify("workflow:compose requires interactive mode", "error");
-		return;
-	}
-
-	const input = args?.trim() ?? "";
-	let sourceLabel = input ? "inline requirement" : "blank requirement";
-	let requirement = input;
-	if (input) {
-		const maybePath = isAbsolute(input) ? input : join(ctx.cwd, input);
-		if (existsSync(maybePath) && statSync(maybePath).isFile()) {
-			sourceLabel = relative(ctx.cwd, maybePath);
-			requirement = readFileSync(maybePath, "utf-8");
-		}
-	}
-
-	const prompt = buildWorkflowComposePrompt(ctx.cwd, sourceLabel, requirement);
-	ctx.ui.setEditorText(prompt);
-	ctx.ui.notify("Workflow compose prompt copied into editor. Send it as-is; the assistant will ask for the requirement and clarifying details in chat.", "info");
-}
-
-function buildWorkflowComposePrompt(cwd: string, sourceLabel: string, requirement: string): string {
-	const workflows = listWorkflowNames(cwd);
-	return `# Compose a Task-Specific Pi Workflow
-
-You are helping me create a task-specific workflow for the Pi workflow extension.
-
-The goal is not to force my task into an existing workflow. The correct process is:
-
-1. Understand the requirement/spec draft.
-2. Ask clarifying questions until the task is specific enough to run.
-3. Design a task-specific workflow DAG and node contract.
-4. Convert the clarified requirement into a runnable spec for that workflow.
-5. Preview the workflow and spec for confirmation.
-6. After confirmation, write both files and validate them.
-7. Ask whether to run it; if confirmed, run with /workflow:run <spec>.
-
-## Source Requirement
-
-Source: ${sourceLabel}
-
-\`\`\`md
-${requirement || "No requirement provided yet. Ask me to describe the task, then continue with clarifying questions before generating workflow JSON."}
-\`\`\`
-
-## Existing Workflow Extension Context
-
-Docs:
-
-- ${cwd}/.pi/agent/extensions/docs/workflow.md
-
-Workflow template directory:
-
-- ${cwd}/.pi/workflows
-
-Repo workflow copies:
-
-- ${cwd}/.pi/agent/extensions/workflows
-
-Existing workflows:
-
-${workflows.map((name) => `- ${name}`).join("\n") || "- (none found)"}
-
-Useful source files:
-
-- ${cwd}/.pi/agent/extensions/workflow-designer-src/types.ts
-- ${cwd}/.pi/agent/extensions/workflow-designer-src/workflow.ts
-- ${cwd}/.pi/agent/extensions/workflow-designer-src/run.ts
-- ${cwd}/.pi/agent/extensions/workflow-designer-src/commands.ts
-
-## Conversation Rules
-
-- Start by summarizing what you understand.
-- Ask 2-4 concrete clarifying questions at a time.
-- Do not generate final workflow JSON until required decisions are clear.
-- Prefer workflow topology from task semantics, not from existing templates.
-- Use existing templates only as examples.
-- Nodes should be goal/prompt-driven.
-- Use multi-agent nodes only when one outer DAG node benefits from internal specialist phases.
-- For implementation/remediation tasks, prefer a multi-agent internal feedback loop when verification should guide fixes: manager-plan -> developer-implement -> verifier-review -> developer-fix -> verifier-recheck -> manager-finalize.
-- Avoid broadcast/group-chat multi-agent design; use manager/router + shared artifacts + directed messages.
-- Treat review findings as successful outputs for review nodes; do not mark a review node failed just because it found issues.
-- Treat verification as an agent definition: top-level \`verification.agent\` may define the final gate verifier role/responsibilities, while multi-agent implementation nodes should define verifier/tester as normal internal \`executor.agents\` and \`phases\`.
-- Treat engine-level node verification as a final quality gate, not as the primary developer feedback loop. If a multi-agent node already has verifier/recheck phases, keep outer verification lightweight and focused on whether the final node report/result addressed the internal verifier findings.
-
-## Required Output Files After Confirmation
-
-Choose a safe workflow name, then write:
-
-1. Workflow template:
-
-   \`\`\`text
-   ${cwd}/.pi/workflows/<workflow-name>.workflow.json
-   ${cwd}/.pi/agent/extensions/workflows/<workflow-name>.workflow.json
-   \`\`\`
-
-2. Runnable spec:
-
-   \`\`\`text
-   ${cwd}/specs/<workflow-name>-<short-task>.md
-   \`\`\`
-
-The spec must declare the workflow:
-
-\`\`\`yaml
----
-template: <template-name>
-workflow: <workflow-name>
-title: <title>
----
-\`\`\`
-
-## Workflow JSON Requirements
-
-The workflow must include:
-
-- \`version\`
-- \`name\`
-- \`description\`
-- \`inputs.spec.template\`
-- \`inputs.spec.validation.requiredSections\`
-- \`inputs.spec.validation.forbiddenPlaceholders\`
-- \`nodes\`
-- \`edges\`
-
-Each node should include:
-
-- \`id\`
-- \`title\`
-- \`type\`
-- \`goal\`
-- \`inputs\`
-- \`outputs\`
-- \`executor\`
-- \`completionPolicy\`
-- \`verification\`
-- optional \`layout\`
-
-Verification guidance:
-
-- Single-agent work nodes usually benefit from \`semanticVerification: true\` because there is no internal reviewer.
-- Multi-agent implementation/remediation nodes should put feedback inside phases using a verifier/tester agent, then use engine-level verification only as a final gate.
-- When engine-level verification is enabled, define \`verification.agent\` with an id, role, and responsibilities so the verifier is explicit like other agents.
-- Simple deterministic or mechanical nodes may set \`semanticVerification: false\` to avoid unnecessary verifier cost.
-
-For multi-agent nodes, use:
-
-- \`executor.kind = "multi-agent"\`
-- \`coordinator\`
-- \`agents\`
-- \`protocol\`
-- \`phases\`
-- declared phase \`outputs\` that are safe relative paths under the node directory
-
-## Preview Before Writing
-
-Before writing files, show me:
-
-1. Workflow name and purpose.
-2. DAG as text.
-3. Node list with executor kind and verification behavior.
-4. Multi-agent clusters and phases, if any.
-5. Spec required sections.
-6. Files that will be written.
-7. Any open risks or assumptions.
-
-Ask for explicit confirmation before writing.
-
-## Validation After Writing
-
-After writing files, run:
-
-\`\`\`bash
-cd ${cwd}/.pi/agent/extensions
-PI_OFFLINE=1 pi --no-extensions -e ${cwd}/.pi/agent/extensions/workflow-designer.ts --list-models
-./scripts/workflow-smoke-test.sh
-python3 -m json.tool ${cwd}/.pi/workflows/<workflow-name>.workflow.json
-\`\`\`
-
-Then ask whether to run with an explicit alias:
-
-\`\`\`text
-/workflow:run specs/<workflow-name>-<short-task>.md --alias <short-run-name>
-\`\`\`
-`;
+async function deprecatedComposeWorkflow(_args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {
+	const message = "workflow:compose is deprecated. Ask the assistant to author a task-specific workflow/spec directly; use the workflow-spec-authoring skill and run with /workflow:run <spec> --alias <name>.";
+	ctx.ui.notify(message, "info");
+	if (ctx.hasUI) ctx.ui.setEditorText("Please help me author a task-specific Pi workflow template and runnable spec. Use dynamic-managed-routing for complex multi-agent nodes and require an explicit /workflow:run --alias when suggesting a run command.");
 }
 
 async function openDesigner(args: string | undefined, ctx: ExtensionCommandContext): Promise<void> {

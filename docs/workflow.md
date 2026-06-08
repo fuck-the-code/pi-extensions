@@ -11,13 +11,9 @@ docs/spec-to-design-workflow.md
 
 ## Quick Start
 
-1. For a new task, compose a task-specific workflow/spec from the requirement:
+1. For a new task, ask the assistant to author a task-specific workflow template and runnable spec directly.
 
-   ```text
-   /workflow:compose specs/draft-requirement.md
-   ```
-
-   This copies a fixed compose prompt into the editor. Send it as-is; the assistant will ask for the requirement and clarifying questions in chat, then preview the generated workflow/spec before writing files.
+   The assistant should use the `workflow-spec-authoring` skill/prompt rules: clarify requirements, design the outer DAG, use `dynamic-managed-routing` for complex multi-agent nodes, preview before writing files, validate, and suggest a run command with an explicit alias.
 
 2. For a known template, create a spec from a workflow template:
 
@@ -61,7 +57,7 @@ Public command set:
 
 ```text
 /workflow:help      Show this help overlay
-/workflow:compose   Compose a task-specific workflow/spec from a requirement
+/workflow:compose   Deprecated; ask the assistant to author workflow/spec directly
 /workflow:create    Generate a required spec template for an existing workflow
 /workflow:run       Create/resume a run and auto-start ready nodes
 /workflow:inspect   Inspect run status, node artifacts, and conversations
@@ -69,29 +65,17 @@ Public command set:
 /workflow:designer  Open visual workflow DAG designer
 ```
 
-### `/workflow:compose [requirement-or-path]`
+### `/workflow:compose [requirement-or-path]` Deprecated
 
-Starts the dynamic workflow design flow.
+`/workflow:compose` is retained only as a compatibility stub. It no longer owns the workflow-authoring rules or copies a large prompt.
 
-Use it when the task should get its own workflow instead of being forced into an existing template:
+For new task-specific workflows, ask the assistant directly, for example:
 
 ```text
-/workflow:compose
-/workflow:compose specs/draft-requirement.md
-/workflow:compose "Build a workflow for safely hardening process spawning"
+Please help me author a task-specific Pi workflow template and runnable spec for this requirement.
 ```
 
-The command copies a structured compose prompt into the editor. Send the prompt as-is; do not edit it manually unless you want to. The main conversation should then:
-
-1. Summarize the requirement.
-2. Ask clarifying questions.
-3. Design a task-specific DAG.
-4. Generate a workflow JSON template and runnable spec.
-5. Preview both for confirmation.
-6. Write files only after confirmation.
-7. Validate and ask whether to run.
-
-This is the preferred flow for new non-routine tasks.
+The assistant should use the `workflow-spec-authoring` skill/prompt guidance. Complex implementation/testing/remediation nodes should use dynamic manager-driven multi-agent routing instead of static phase pipelines.
 
 ### `/workflow:create [workflow]`
 
@@ -376,9 +360,9 @@ Conceptually, verification is also an agent. You can define its role/responsibil
 }
 ```
 
-For multi-agent implementation/remediation nodes, prefer defining verifier/tester as a normal internal agent and phase. Use the top-level `verification.agent` only as the final external gate.
+For implementation/remediation nodes, prefer dynamic manager-driven multi-agent routing. Define reviewer/tester as normal callable agents in `executor.agents`; let the manager decide when to dispatch them. Use top-level `verification` only for rare external gates, not as the primary feedback loop.
 
-Current flow:
+Current engine-level verification flow:
 
 ```text
 work node agent
@@ -397,18 +381,16 @@ verifier-events.jsonl
 
 If verification fails, the node becomes `needs-revision` and downstream nodes stay blocked until retry/resume.
 
-For implementation/remediation work where verifier feedback should guide fixes, prefer a multi-agent node with internal feedback phases:
+For implementation/remediation work where reviewer feedback should guide fixes, prefer a dynamic multi-agent node:
 
 ```text
-manager-plan
-  -> developer-implement
-  -> verifier-review
-  -> developer-fix
-  -> verifier-recheck
-  -> manager-finalize
+manager turn -> dispatch implementer
+manager turn -> dispatch reviewer/tester
+manager turn -> dispatch implementer for fixes if needed
+manager turn -> finalize completed/needs-revision
 ```
 
-Use engine-level verification after that as a final gate checking whether the whole node addressed the verifier findings. For simple deterministic/mechanical nodes, set `semanticVerification: false` to avoid unnecessary verifier cost.
+Review findings are normal artifacts. The manager decides the next dispatch based on the current state and the declared agent pool. For simple deterministic/mechanical nodes, set `semanticVerification: false` to avoid unnecessary verifier cost.
 
 ## Multi-Agent Nodes
 
