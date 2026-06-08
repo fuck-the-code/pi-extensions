@@ -134,6 +134,17 @@ function testLifecycleSourceInvariants() {
     && commands.includes('return { exitCode: 1, output };'),
     'multi-agent phase output enforcement/failure stop invariant missing');
 
+  assert(commands.includes('executeDynamicMultiAgentNode')
+    && commands.includes('dynamic-managed-routing')
+    && commands.includes('control/next-action.json')
+    && commands.includes('Unknown dispatch agent')
+    && commands.includes('Dynamic multi-agent node exceeded maxTurns'),
+    'dynamic multi-agent manager routing invariants missing');
+
+  assert(commands.includes('Creating a workflow run requires an explicit alias')
+    && !commands.includes('function defaultRunAlias('),
+    'new workflow runs must require an explicit alias and must not auto-generate one');
+
   assert(reconcile.includes('if (run.status === "aborted") return run;'),
     'aborted runs must be final during artifact reconciliation');
 

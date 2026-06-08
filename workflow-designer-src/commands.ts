@@ -1,5 +1,5 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { DesignerResult, EditResult, WorkflowDefinition, WorkflowNode, WorkflowNodeExecutorPhase, WorkflowRun } from "./types";
 import {
@@ -310,10 +310,10 @@ PI_OFFLINE=1 pi --no-extensions -e ${cwd}/.pi/agent/extensions/workflow-designer
 python3 -m json.tool ${cwd}/.pi/workflows/<workflow-name>.workflow.json
 \`\`\`
 
-Then ask whether to run:
+Then ask whether to run with an explicit alias:
 
 \`\`\`text
-/workflow:run specs/<workflow-name>-<short-task>.md
+/workflow:run specs/<workflow-name>-<short-task>.md --alias <short-run-name>
 \`\`\`
 `;
 }
@@ -499,6 +499,11 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 		return;
 	}
 
+	if (!runAlias) {
+		ctx.ui.notify("Creating a workflow run requires an explicit alias. Use: /workflow:run <spec> --alias <name>", "error");
+		return;
+	}
+
 	ensureWorkflowGitignore(ctx.cwd);
 	const { runId, runDir } = createUniqueRunDirectory(ctx.cwd, workflow.name, absSpecPath);
 	const inputsDir = join(runDir, "inputs");
@@ -507,8 +512,6 @@ async function createRun(args: string | undefined, ctx: ExtensionCommandContext)
 
 	const copiedSpec = join(inputsDir, "spec.md");
 	copyFileSync(absSpecPath, copiedSpec);
-
-	if (!runAlias) runAlias = defaultRunAlias(absSpecPath, workflow.name);
 
 	const run: WorkflowRun = {
 		runId,
@@ -554,11 +557,6 @@ function parseRunArgs(args: string | undefined): { alias?: string; positionals: 
 function sanitizeRunAlias(value: string): string | undefined {
 	const trimmed = value.trim().replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ");
 	return trimmed ? trimmed.slice(0, 80) : undefined;
-}
-
-function defaultRunAlias(specPath: string, workflowName: string): string {
-	const specName = basename(specPath).replace(/\.[^.]+$/, "");
-	return `${workflowName}: ${specName}`.slice(0, 80);
 }
 
 function createUniqueRunDirectory(cwd: string, workflowName: string, specPath: string): { runId: string; runDir: string } {
@@ -742,7 +740,52 @@ async function executeSingleAgentNode(
 	return result;
 }
 
+type DynamicNextAction = DynamicDispatchAction | DynamicFinalizeAction | DynamicAbortAction;
+
+type DynamicDispatchAction = {
+	action: "dispatch";
+	agent: string;
+	taskId: string;
+	goal: string;
+	prompt: string;
+	inputs?: string[];
+	expectedOutputs?: string[];
+	timeoutSec?: number;
+	reason?: string;
+};
+
+type DynamicFinalizeAction = {
+	action: "finalize";
+	status: "completed" | "needs-revision" | "failed" | "passed";
+	summary: string;
+	reportPath?: string;
+	resultPath?: string;
+	reason?: string;
+};
+
+type DynamicAbortAction = {
+	action: "abort";
+	status: "failed" | "needs-revision";
+	reason: string;
+};
+
 async function executeMultiAgentNode(
+	ctx: ExtensionCommandContext,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	runDir: string,
+	nodeDir: string,
+	signal?: AbortSignal,
+): Promise<{ exitCode: number; output: string }> {
+	const executor = node.executor;
+	if (executor?.dynamic?.enabled === true || executor?.protocol?.mode === "dynamic-managed-routing") {
+		return executeDynamicMultiAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal);
+	}
+	return executeStaticMultiAgentNode(ctx, workflow, run, node, runDir, nodeDir, signal);
+}
+
+async function executeStaticMultiAgentNode(
 	ctx: ExtensionCommandContext,
 	workflow: WorkflowDefinition,
 	run: WorkflowRun,
@@ -802,6 +845,250 @@ async function executeMultiAgentNode(
 	const output = phaseSummaries.join("\n\n");
 	writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
 	return { exitCode: 0, output };
+}
+
+async function executeDynamicMultiAgentNode(
+	ctx: ExtensionCommandContext,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	runDir: string,
+	nodeDir: string,
+	signal?: AbortSignal,
+): Promise<{ exitCode: number; output: string }> {
+	const executor = node.executor;
+	const agents = executor?.agents ?? [];
+	const managerId = executor?.dynamic?.manager ?? executor?.coordinator;
+	if (!managerId) return { exitCode: 1, output: "dynamic multi-agent executor requires dynamic.manager or coordinator" };
+	if (!agents.some((agent) => agent.id === managerId)) return { exitCode: 1, output: `dynamic manager is not declared in agents: ${managerId}` };
+
+	const maxTurnsRaw = executor?.dynamic?.maxTurns ?? 12;
+	const maxTurns = Math.max(1, Math.min(50, Math.floor(maxTurnsRaw)));
+	const decisionOutput = executor?.dynamic?.decisionOutput ?? "control/next-action.json";
+	const decisionArtifact = validateDeclaredArtifactPath(nodeDir, "dynamic decision output", decisionOutput);
+	const finalOutputs = executor?.dynamic?.finalOutputs ?? node.outputs ?? ["result.json", "report.md"];
+	validateDeclaredArtifactPaths(nodeDir, "dynamic final output", finalOutputs);
+
+	const sharedDir = validateDeclaredArtifactPath(nodeDir, "shared artifacts directory", executor?.protocol?.sharedArtifactsDir ?? "shared");
+	const messagesDir = validateDeclaredArtifactPath(nodeDir, "messages directory", "messages");
+	const agentsDir = validateDeclaredArtifactPath(nodeDir, "agents directory", "agents");
+	const controlDir = validateDeclaredArtifactPath(nodeDir, "control directory", "control");
+	mkdirSync(sharedDir.absolutePath, { recursive: true });
+	mkdirSync(messagesDir.absolutePath, { recursive: true });
+	mkdirSync(agentsDir.absolutePath, { recursive: true });
+	mkdirSync(controlDir.absolutePath, { recursive: true });
+	writeFileSync(join(nodeDir, "prompt.md"), buildNodePrompt(ctx.cwd, workflow, run, node, runDir, nodeDir), "utf-8");
+
+	const turnSummaries: string[] = [];
+	const decisionsPath = join(controlDir.absolutePath, "decisions.jsonl");
+
+	for (let turn = 1; turn <= maxTurns; turn++) {
+		if (signal?.aborted) return { exitCode: 130, output: turnSummaries.join("\n\n") };
+		rmSync(decisionArtifact.absolutePath, { force: true });
+
+		const managerDir = join(agentsDir.absolutePath, formatDynamicTurnDir(turn, managerId));
+		mkdirSync(managerDir, { recursive: true });
+		const managerPrompt = buildDynamicManagerPrompt(ctx.cwd, workflow, run, node, runDir, nodeDir, managerId, turn, maxTurns, decisionArtifact.relativePath, finalOutputs);
+		writeFileSync(join(managerDir, "prompt.md"), managerPrompt, "utf-8");
+		const managerResult = await runPiPrint(ctx.cwd, managerPrompt, signal, {
+			eventLogPath: join(managerDir, "events.jsonl"),
+			transcriptPath: join(managerDir, "agent-output.md"),
+		});
+		writeFileSync(join(managerDir, "agent-output.md"), managerResult.output, "utf-8");
+		turnSummaries.push(`## Dynamic turn ${turn}: manager\n\nAgent: ${managerId}\nExit: ${managerResult.exitCode}\n\nTranscript: ${relative(ctx.cwd, join(managerDir, "agent-output.md"))}`);
+		writeFileSync(join(nodeDir, "agent-output.md"), turnSummaries.join("\n\n"), "utf-8");
+		if (managerResult.exitCode !== 0) return { exitCode: managerResult.exitCode, output: turnSummaries.join("\n\n") };
+
+		let action: DynamicNextAction;
+		try {
+			action = readDynamicNextAction(decisionArtifact.absolutePath);
+			validateDynamicAction(nodeDir, agents.map((agent) => agent.id), action);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			turnSummaries.push(`## Dynamic manager action failure\n\nTurn: ${turn}\nReason: ${message}`);
+			const output = turnSummaries.join("\n\n");
+			writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+			return { exitCode: 1, output };
+		}
+		appendFileSync(decisionsPath, `${JSON.stringify({ turn, createdAt: new Date().toISOString(), ...action })}\n`, "utf-8");
+
+		if (action.action === "finalize") {
+			const reportPath = action.reportPath ?? "report.md";
+			const resultPath = action.resultPath ?? "result.json";
+			try {
+				requireNonEmptyDeclaredArtifact(nodeDir, "dynamic finalize report", reportPath);
+				requireNonEmptyDeclaredArtifact(nodeDir, "dynamic finalize result", resultPath);
+				for (const output of finalOutputs) requireNonEmptyDeclaredArtifact(nodeDir, "dynamic final output", output);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				turnSummaries.push(`## Dynamic finalize failure\n\nTurn: ${turn}\nReason: ${message}`);
+				const output = turnSummaries.join("\n\n");
+				writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+				return { exitCode: 1, output };
+			}
+			turnSummaries.push(`## Dynamic finalize\n\nStatus: ${action.status}\nSummary: ${action.summary}\nReason: ${action.reason ?? "(none)"}`);
+			const output = turnSummaries.join("\n\n");
+			writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+			return { exitCode: 0, output };
+		}
+
+		if (action.action === "abort") {
+			writeSyntheticDynamicCompletion(nodeDir, action.status, action.reason, finalOutputs);
+			turnSummaries.push(`## Dynamic abort\n\nStatus: ${action.status}\nReason: ${action.reason}`);
+			const output = turnSummaries.join("\n\n");
+			writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+			return { exitCode: 0, output };
+		}
+
+		const dispatchOutputs = validateDeclaredArtifactPaths(nodeDir, `dynamic dispatch ${action.taskId} expected output`, action.expectedOutputs ?? []);
+		const dispatchDir = join(agentsDir.absolutePath, formatDynamicTurnDir(turn, action.agent, action.taskId));
+		mkdirSync(dispatchDir, { recursive: true });
+		const dispatchPrompt = buildDynamicDispatchPrompt(ctx.cwd, workflow, run, node, action, runDir, nodeDir, turn, maxTurns);
+		writeFileSync(join(dispatchDir, "prompt.md"), dispatchPrompt, "utf-8");
+		const dispatchResult = await runPiPrint(ctx.cwd, dispatchPrompt, signal, {
+			eventLogPath: join(dispatchDir, "events.jsonl"),
+			transcriptPath: join(dispatchDir, "agent-output.md"),
+		});
+		writeFileSync(join(dispatchDir, "agent-output.md"), dispatchResult.output, "utf-8");
+		appendDynamicSystemMessage(nodeDir, managerId, action, dispatchResult.exitCode, dispatchOutputs.map((artifact) => artifact.relativePath));
+		turnSummaries.push(`## Dynamic turn ${turn}: dispatch\n\nAgent: ${action.agent}\nTask: ${action.taskId}\nExit: ${dispatchResult.exitCode}\nReason: ${action.reason ?? "(none)"}\n\nTranscript: ${relative(ctx.cwd, join(dispatchDir, "agent-output.md"))}`);
+		writeFileSync(join(nodeDir, "agent-output.md"), turnSummaries.join("\n\n"), "utf-8");
+		if (dispatchResult.exitCode !== 0) return { exitCode: dispatchResult.exitCode, output: turnSummaries.join("\n\n") };
+		for (const artifact of dispatchOutputs) {
+			try {
+				requireNonEmptyDeclaredArtifact(nodeDir, `dynamic dispatch ${action.taskId} expected output`, artifact.relativePath);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				turnSummaries.push(`## Dynamic dispatch output failure\n\nTask: ${action.taskId}\nArtifact: ${artifact.relativePath}\nReason: ${message}`);
+				const output = turnSummaries.join("\n\n");
+				writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+				return { exitCode: 1, output };
+			}
+		}
+	}
+
+	const reason = `Dynamic multi-agent node exceeded maxTurns (${maxTurns}) before finalize.`;
+	writeSyntheticDynamicCompletion(nodeDir, "needs-revision", reason, finalOutputs);
+	turnSummaries.push(`## Dynamic maxTurns exceeded\n\n${reason}`);
+	const output = turnSummaries.join("\n\n");
+	writeFileSync(join(nodeDir, "agent-output.md"), output, "utf-8");
+	return { exitCode: 0, output };
+}
+
+function readDynamicNextAction(path: string): DynamicNextAction {
+	if (!existsSync(path)) throw new Error(`Manager did not write next action: ${path}`);
+	let parsed: any;
+	try { parsed = JSON.parse(readFileSync(path, "utf-8")); }
+	catch (err) { throw new Error(`Invalid next-action JSON: ${err instanceof Error ? err.message : String(err)}`); }
+	return parsed as DynamicNextAction;
+}
+
+function validateDynamicAction(nodeDir: string, agentIds: string[], action: DynamicNextAction): void {
+	if (!action || typeof action !== "object") throw new Error("next-action must be a JSON object");
+	if (action.action === "dispatch") {
+		if (!agentIds.includes(action.agent)) throw new Error(`Unknown dispatch agent: ${action.agent}`);
+		if (!action.taskId || !/^[A-Za-z0-9_.-]+$/.test(action.taskId)) throw new Error(`Invalid dispatch taskId: ${action.taskId ?? "(missing)"}`);
+		if (!action.goal || !action.prompt) throw new Error("dispatch action requires goal and prompt");
+		validateDeclaredArtifactPaths(nodeDir, `dynamic dispatch ${action.taskId} input`, action.inputs ?? []);
+		validateDeclaredArtifactPaths(nodeDir, `dynamic dispatch ${action.taskId} expected output`, action.expectedOutputs ?? []);
+		if (action.timeoutSec !== undefined && (!Number.isFinite(action.timeoutSec) || action.timeoutSec <= 0)) throw new Error("dispatch timeoutSec must be positive when provided");
+		return;
+	}
+	if (action.action === "finalize") {
+		if (!new Set(["passed", "completed", "needs-revision", "failed"]).has(action.status)) throw new Error(`Invalid finalize status: ${action.status}`);
+		if (!action.summary) throw new Error("finalize action requires summary");
+		if (action.reportPath) validateDeclaredArtifactPath(nodeDir, "dynamic finalize reportPath", action.reportPath);
+		if (action.resultPath) validateDeclaredArtifactPath(nodeDir, "dynamic finalize resultPath", action.resultPath);
+		return;
+	}
+	if (action.action === "abort") {
+		if (!new Set(["needs-revision", "failed"]).has(action.status)) throw new Error(`Invalid abort status: ${action.status}`);
+		if (!action.reason) throw new Error("abort action requires reason");
+		return;
+	}
+	throw new Error(`Unknown dynamic action: ${(action as any).action ?? "(missing)"}`);
+}
+
+function formatDynamicTurnDir(turn: number, agent: string, taskId?: string): string {
+	const safeTask = taskId ? `-${taskId.replace(/[^A-Za-z0-9_.-]+/g, "-")}` : "";
+	return `turn-${String(turn).padStart(3, "0")}-${agent}${safeTask}`;
+}
+
+function appendDynamicSystemMessage(nodeDir: string, managerId: string, action: DynamicDispatchAction, exitCode: number, outputs: string[]): void {
+	const messagePath = join(nodeDir, "messages", "system-to-manager.jsonl");
+	const message = {
+		from: "system",
+		to: managerId,
+		type: "dynamic-dispatch-complete",
+		taskId: action.taskId,
+		agent: action.agent,
+		exitCode,
+		outputs,
+		createdAt: new Date().toISOString(),
+		summary: `Dynamic dispatch ${action.taskId} to ${action.agent} completed with exit code ${exitCode}`,
+	};
+	appendFileSync(messagePath, `${JSON.stringify(message)}\n`, "utf-8");
+}
+
+function writeSyntheticDynamicCompletion(nodeDir: string, status: "failed" | "needs-revision", reason: string, finalOutputs: string[]): void {
+	const reportPath = join(nodeDir, "report.md");
+	const resultPath = join(nodeDir, "result.json");
+	if (!existsSync(reportPath)) writeFileSync(reportPath, `# Dynamic multi-agent completion\n\nStatus: ${status}\n\nReason: ${reason}\n`, "utf-8");
+	if (!existsSync(resultPath)) {
+		writeFileSync(resultPath, JSON.stringify({ status, summary: reason, issues: [{ severity: status === "failed" ? "critical" : "major", message: reason }], outputs: finalOutputs }, null, 2) + "\n", "utf-8");
+	}
+}
+
+function buildDynamicManagerPrompt(
+	cwd: string,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	runDir: string,
+	nodeDir: string,
+	managerId: string,
+	turn: number,
+	maxTurns: number,
+	decisionOutput: string,
+	finalOutputs: string[],
+): string {
+	const executor = node.executor;
+	const agents = executor?.agents ?? [];
+	const manager = agents.find((agent) => agent.id === managerId);
+	const nodeInputs = resolveNodeInputs(cwd, node, run, runDir);
+	const messagesPath = join(nodeDir, "messages", "system-to-manager.jsonl");
+	const decisionsPath = join(nodeDir, "control", "decisions.jsonl");
+	const readShort = (path: string, max = 12000) => {
+		try {
+			if (!existsSync(path) || !statSync(path).isFile()) return "(missing)";
+			const content = readFileSync(path, "utf-8");
+			return content.length > max ? `${content.slice(0, max)}\n...[truncated]` : content;
+		} catch (err) {
+			return `(unreadable: ${err instanceof Error ? err.message : String(err)})`;
+		}
+	};
+	return `# Dynamic Multi-Agent Manager Turn\n\nYou are the manager for a dynamic multi-agent workflow node. You do not perform all work yourself. Inspect current state and choose exactly one next action: dispatch, finalize, or abort.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\nTurn: ${turn} / ${maxTurns}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Manager\n\nID: ${managerId}\nRole: ${manager?.role ?? managerId}\nResponsibilities:\n${(manager?.responsibilities ?? ["Dynamically dispatch declared agents", "Finalize only when node outputs are complete"]).map((item) => `- ${item}`).join("\n")}\n\n## Available Agents\n\n${agents.map((agent) => `- ${agent.id}: ${agent.role ?? agent.id}\n  Responsibilities:\n${(agent.responsibilities ?? []).map((item) => `    - ${item}`).join("\n") || "    - Follow manager dispatch prompts."}`).join("\n")}\n\n## Protocol\n\n- Mode: ${executor?.protocol?.mode ?? "dynamic-managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Manager dispatches one declared agent at a time. No broadcast."}\n- Shared artifacts directory: ${relative(cwd, join(nodeDir, executor?.protocol?.sharedArtifactsDir ?? "shared"))}\n- Messages directory: ${relative(cwd, join(nodeDir, "messages"))}\n- Control directory: ${relative(cwd, join(nodeDir, "control"))}\n\n## Node Inputs\n\n${nodeInputs.map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Recent System Messages\n\n\`\`\`jsonl\n${readShort(messagesPath, 16000)}\n\`\`\`\n\n## Previous Decisions\n\n\`\`\`jsonl\n${readShort(decisionsPath, 12000)}\n\`\`\`\n\n## Required Final Outputs\n\n${finalOutputs.map((output) => `- ${relative(cwd, join(nodeDir, output))}`).join("\n")}\n\n## Action Schema\n\nWrite exactly one JSON object to ${relative(cwd, join(nodeDir, decisionOutput))}. Do not write prose into that file.\n\nDispatch example:\n\`\`\`json\n{\n  "action": "dispatch",\n  "agent": "${agents.find((agent) => agent.id !== managerId)?.id ?? managerId}",\n  "taskId": "short-safe-task-id",\n  "goal": "Concrete goal for this agent turn",\n  "prompt": "Detailed instructions for this agent turn",\n  "inputs": ["shared/example-input.md"],\n  "expectedOutputs": ["shared/example-output.md"],\n  "reason": "Why this dispatch is the right next step"\n}\n\`\`\`\n\nFinalize example:\n\`\`\`json\n{\n  "action": "finalize",\n  "status": "completed",\n  "summary": "Node is complete",\n  "reportPath": "report.md",\n  "resultPath": "result.json",\n  "reason": "Acceptance criteria are met"\n}\n\`\`\`\n\nAbort example:\n\`\`\`json\n{\n  "action": "abort",\n  "status": "needs-revision",\n  "reason": "Concrete blocker or max repair attempts reached"\n}\n\`\`\`\n\n## Important Rules\n\n- Dispatch only agents declared above.\n- Use safe relative paths under the node directory for expectedOutputs.\n- If dispatching work, require concrete expectedOutputs whenever possible.\n- If finalizing, ensure report.md and result.json already exist and are non-empty.\n- result.json must use status passed/completed/failed/needs-revision.\n- Do not modify workflow topology or run.json.\n- Do not push, merge, or revert unless the user explicitly requested it.\n`;
+}
+
+function buildDynamicDispatchPrompt(
+	cwd: string,
+	workflow: WorkflowDefinition,
+	run: WorkflowRun,
+	node: WorkflowNode,
+	action: DynamicDispatchAction,
+	runDir: string,
+	nodeDir: string,
+	turn: number,
+	maxTurns: number,
+): string {
+	const executor = node.executor;
+	const agent = (executor?.agents ?? []).find((item) => item.id === action.agent);
+	const sharedDir = validateDeclaredArtifactPath(nodeDir, "shared artifacts directory", executor?.protocol?.sharedArtifactsDir ?? "shared");
+	const messagesDir = validateDeclaredArtifactPath(nodeDir, "messages directory", "messages");
+	const nodeInputs = resolveNodeInputs(cwd, node, run, runDir);
+	const dispatchInputs = (action.inputs ?? []).map((input) => resolveMultiAgentPhasePath(cwd, run, nodeDir, input));
+	const expectedOutputs = validateDeclaredArtifactPaths(nodeDir, `dynamic dispatch ${action.taskId} expected output`, action.expectedOutputs ?? []);
+	return `# Dynamic Multi-Agent Dispatch Turn\n\nYou are executing one dynamically dispatched agent turn inside a workflow node. You are not the manager. Do only the task assigned in this dispatch.\n\n## Workflow\n\nName: ${workflow.name}\nRun ID: ${run.runId}\nTurn: ${turn} / ${maxTurns}\n\n## Parent Node\n\nID: ${node.id}\nTitle: ${node.title ?? node.id}\nGoal: ${node.goal ?? node.description ?? "Complete this node."}\nOutput directory: ${relative(cwd, nodeDir)}\n\n## Dispatch\n\nTask ID: ${action.taskId}\nAgent: ${action.agent}\nRole: ${agent?.role ?? action.agent}\nGoal: ${action.goal}\nReason: ${action.reason ?? "(none)"}\n\n## Dispatch Prompt\n\n${action.prompt}\n\n## Agent Responsibilities\n\n${(agent?.responsibilities ?? []).map((item) => `- ${item}`).join("\n") || "- Follow the dispatch prompt."}\n\n## Protocol\n\n- Coordinator: ${executor?.coordinator ?? executor?.dynamic?.manager ?? "manager"}\n- Mode: ${executor?.protocol?.mode ?? "dynamic-managed-routing"}\n- Broadcast: ${executor?.protocol?.broadcast === true ? "true" : "false"}\n- Rule: ${executor?.protocol?.rule ?? "Agents respond only to manager dispatches."}\n- Shared artifacts directory: ${relative(cwd, sharedDir.absolutePath)}\n- Messages directory: ${relative(cwd, messagesDir.absolutePath)}\n\n## Available Inputs\n\n${[...nodeInputs, ...dispatchInputs].map((input) => `- ${input}`).join("\n") || "- (none)"}\n\n## Required Dispatch Outputs\n\n${expectedOutputs.map((output) => `- ${relative(cwd, output.absolutePath)}`).join("\n") || "- Write a concise useful artifact under shared/ or messages/."}\n\n## Important Rules\n\n- Do not decide node completion. The manager decides next action.\n- Do not write parent result.json/report.md unless explicitly dispatched to do so.\n- Do not modify workflow topology or run.json.\n- If you need to report back, write a directed JSONL message in messages/ addressed to the manager.\n- Keep artifacts concise, concrete, and actionable.\n`;
 }
 
 function appendSystemManagerMessage(nodeDir: string, phaseId: string, agentId: string, exitCode: number, outputs: string[]): void {

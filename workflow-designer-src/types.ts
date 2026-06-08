@@ -29,6 +29,15 @@ export interface WorkflowNodeExecutorPhase {
 	outputs?: string[];
 }
 
+export interface WorkflowNodeExecutorDynamic {
+	enabled?: boolean;
+	manager?: string;
+	maxTurns?: number;
+	decisionOutput?: string;
+	finalOutputs?: string[];
+	requireFinalOutputs?: boolean;
+}
+
 export interface WorkflowNodeExecutor {
 	kind?: "agent" | "multi-agent" | "command" | "manual" | string;
 	prompt?: string;
@@ -40,6 +49,7 @@ export interface WorkflowNodeExecutor {
 	agents?: WorkflowNodeExecutorAgent[];
 	protocol?: WorkflowNodeExecutorProtocol;
 	phases?: WorkflowNodeExecutorPhase[];
+	dynamic?: WorkflowNodeExecutorDynamic;
 }
 
 export interface WorkflowNodeCompletionPolicy {

@@ -60,6 +60,19 @@ export function validateWorkflowShape(workflow: WorkflowDefinition): void {
 		if (node.verification?.output?.path) validateArtifactPaths(`node ${node.id} verification output`, [node.verification.output.path]);
 		const protocol = node.executor?.protocol;
 		if (protocol?.sharedArtifactsDir) validateArtifactPaths(`node ${node.id} shared artifacts directory`, [protocol.sharedArtifactsDir]);
+		const dynamic = node.executor?.dynamic;
+		const dynamicEnabled = dynamic?.enabled === true || protocol?.mode === "dynamic-managed-routing";
+		if (dynamicEnabled) {
+			const agents = node.executor?.agents ?? [];
+			const manager = dynamic?.manager ?? node.executor?.coordinator;
+			if (!manager) throw new Error(`node ${node.id} dynamic executor requires a manager or coordinator`);
+			if (!agents.some((agent) => agent.id === manager)) throw new Error(`node ${node.id} dynamic manager is not declared in agents: ${manager}`);
+			if (dynamic?.decisionOutput) validateArtifactPaths(`node ${node.id} dynamic decision output`, [dynamic.decisionOutput]);
+			if (dynamic?.finalOutputs) validateArtifactPaths(`node ${node.id} dynamic final output`, dynamic.finalOutputs);
+			if (dynamic?.maxTurns !== undefined && (!Number.isFinite(dynamic.maxTurns) || dynamic.maxTurns < 1 || dynamic.maxTurns > 50)) {
+				throw new Error(`node ${node.id} dynamic maxTurns must be between 1 and 50`);
+			}
+		}
 		for (const phase of node.executor?.phases ?? []) validateArtifactPaths(`node ${node.id} phase ${phase.id} output`, phase.outputs ?? []);
 	}
 	for (const edge of workflow.edges) {

@@ -27,10 +27,10 @@ docs/spec-to-design-workflow.md
 
    Pick a workflow, then save the generated markdown into `specs/<name>.md`.
 
-3. Run from a spec:
+3. Run from a spec with an explicit alias:
 
    ```text
-   /workflow:run specs/<name>.md
+   /workflow:run specs/<name>.md --alias <short-run-name>
    ```
 
    Specs declare their workflow in frontmatter, for example:
@@ -116,26 +116,25 @@ Interactive mode:
 
 Select workflow, then select a spec whose declared `workflow:` matches.
 
-Explicit workflow and spec:
+Explicit workflow and spec requires an alias:
 
 ```text
-/workflow:run code-review specs/workflow-extension-code-review.md
-```
-
-Spec-only mode:
-
-```text
-/workflow:run specs/workflow-extension-code-review.md
-```
-
-Set a run alias shown in inspect/history:
-
-```text
-/workflow:run specs/workflow-extension-code-review.md --alias review-hardening
 /workflow:run code-review specs/workflow-extension-code-review.md --alias review-hardening
 ```
 
-If no alias is provided, one is generated from workflow name and spec filename.
+Spec-only mode requires an explicit run alias:
+
+```text
+/workflow:run specs/workflow-extension-code-review.md --alias review-hardening
+```
+
+Explicit workflow and spec also require an alias:
+
+```text
+/workflow:run code-review specs/workflow-extension-code-review.md --alias review-hardening
+```
+
+Run aliases are shown in inspect/history. Creating a new run without `--alias` / `-a` is rejected so run names stay intentional and searchable.
 
 The spec must declare:
 
@@ -260,10 +259,18 @@ Multi-agent node artifacts:
 ```text
 nodes/<nodeId>/shared/
 nodes/<nodeId>/messages/
-nodes/<nodeId>/agents/<phaseId>/prompt.md
-nodes/<nodeId>/agents/<phaseId>/agent-output.md
-nodes/<nodeId>/agents/<phaseId>/events.jsonl
-nodes/<nodeId>/multi-agent-output.md
+nodes/<nodeId>/agents/<phaseId-or-turnId>/prompt.md
+nodes/<nodeId>/agents/<phaseId-or-turnId>/agent-output.md
+nodes/<nodeId>/agents/<phaseId-or-turnId>/events.jsonl
+```
+
+Dynamic multi-agent nodes also write:
+
+```text
+nodes/<nodeId>/control/next-action.json
+nodes/<nodeId>/control/decisions.jsonl
+nodes/<nodeId>/agents/turn-001-manager/
+nodes/<nodeId>/agents/turn-001-<agent>-<taskId>/
 ```
 
 ## Source Code Locations
@@ -405,7 +412,11 @@ Use engine-level verification after that as a final gate checking whether the wh
 
 ## Multi-Agent Nodes
 
-A multi-agent node is one outer DAG node that internally runs multiple real Pi child agents/phases.
+A multi-agent node is one outer DAG node that internally runs multiple real Pi child agents. Two execution modes are supported.
+
+### Static phase mode
+
+Static mode is a deterministic pipeline. The workflow author predeclares every phase and the engine runs them in order.
 
 Executor shape:
 
@@ -432,14 +443,86 @@ Executor shape:
 }
 ```
 
-Rules:
+Static rules:
 
 - This is not broadcast/group chat.
 - Each phase launches a real `pi --mode json -p` child process.
 - Agents communicate through `shared/` artifacts and directed `messages/*.jsonl`.
 - Declared phase outputs must exist, be regular files, and be non-empty before later phases continue.
 - Final/coordinator phase writes parent node `result.json` and `report.md`.
-- The engine automatically appends phase completion notices to `messages/system-to-manager.jsonl`; agent-authored handoff messages are still useful for task-specific context.
+- The engine appends phase completion notices to `messages/system-to-manager.jsonl`.
+
+### Dynamic managed-routing mode
+
+Dynamic mode treats `agents` as a resource pool and lets the manager choose who acts next at runtime. The workflow author declares the available agents, manager, limits, and final outputs; the manager writes one action per turn to `control/next-action.json`.
+
+Executor shape:
+
+```json
+{
+  "kind": "multi-agent",
+  "coordinator": "manager",
+  "protocol": {
+    "mode": "dynamic-managed-routing",
+    "broadcast": false,
+    "sharedArtifactsDir": "shared",
+    "rule": "Manager dispatches declared agents dynamically."
+  },
+  "dynamic": {
+    "enabled": true,
+    "manager": "manager",
+    "maxTurns": 12,
+    "decisionOutput": "control/next-action.json",
+    "finalOutputs": ["result.json", "report.md"]
+  },
+  "agents": [
+    { "id": "manager", "role": "Dynamic task manager" },
+    { "id": "writer", "role": "Writer" },
+    { "id": "reviewer", "role": "Reviewer" }
+  ]
+}
+```
+
+Manager actions:
+
+```json
+{
+  "action": "dispatch",
+  "agent": "writer",
+  "taskId": "write-draft",
+  "goal": "Write the draft artifact",
+  "prompt": "Write shared/draft.md from the spec.",
+  "inputs": ["{{inputs.spec}}"],
+  "expectedOutputs": ["shared/draft.md"],
+  "reason": "A draft is needed before review."
+}
+```
+
+```json
+{
+  "action": "finalize",
+  "status": "completed",
+  "summary": "All required artifacts are complete.",
+  "reportPath": "report.md",
+  "resultPath": "result.json"
+}
+```
+
+```json
+{
+  "action": "abort",
+  "status": "needs-revision",
+  "reason": "Reviewer still reports high blockers after the allowed repair turns."
+}
+```
+
+Dynamic rules:
+
+- Manager can dispatch only agents declared in `executor.agents`.
+- Dispatch `expectedOutputs` must be safe relative paths under the node directory and are checked for non-empty files.
+- Manager must finalize only after writing non-empty `report.md` and `result.json` or explicitly abort/needs-revision.
+- `maxTurns` prevents infinite repair loops. If exceeded, the engine writes a `needs-revision` result.
+- Static `phases` are ignored when dynamic mode is enabled.
 
 ## Validation Commands
 

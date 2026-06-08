@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "name": "dynamic-managed-demo",
+  "description": "Demo workflow for dynamic manager-driven multi-agent routing. Manager dispatches writer/reviewer at runtime through control/next-action.json.",
+  "inputs": {
+    "spec": {
+      "type": "file",
+      "required": true,
+      "template": "dynamic-managed-demo-spec-v1",
+      "validation": {
+        "requiredSections": [
+          "Goal",
+          "Acceptance Criteria"
+        ],
+        "forbiddenPlaceholders": [
+          "TODO",
+          "TBD",
+          "<fill me>"
+        ]
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "dynamic-demo",
+      "title": "Dynamic Manager Demo",
+      "type": "implementation",
+      "goal": "Use a manager-driven dynamic agent cluster to write and review a small demo artifact from the spec.",
+      "inputs": [
+        "{{inputs.spec}}"
+      ],
+      "outputs": [
+        "result.json",
+        "report.md"
+      ],
+      "executor": {
+        "kind": "multi-agent",
+        "coordinator": "manager",
+        "protocol": {
+          "mode": "dynamic-managed-routing",
+          "broadcast": false,
+          "sharedArtifactsDir": "shared",
+          "rule": "Manager dispatches writer and reviewer dynamically. No broadcast."
+        },
+        "dynamic": {
+          "enabled": true,
+          "manager": "manager",
+          "maxTurns": 6,
+          "decisionOutput": "control/next-action.json",
+          "finalOutputs": [
+            "result.json",
+            "report.md"
+          ]
+        },
+        "agents": [
+          {
+            "id": "manager",
+            "role": "Dynamic manager",
+            "responsibilities": [
+              "Inspect current artifacts and decide the next action",
+              "Dispatch writer and reviewer as needed",
+              "Finalize only after report.md and result.json are written"
+            ],
+            "canDecideCompletion": true
+          },
+          {
+            "id": "writer",
+            "role": "Writer",
+            "responsibilities": [
+              "Write shared/draft.md when dispatched",
+              "Address reviewer feedback when dispatched"
+            ]
+          },
+          {
+            "id": "reviewer",
+            "role": "Reviewer",
+            "responsibilities": [
+              "Review shared/draft.md when dispatched",
+              "Write shared/review.md with pass/fix findings"
+            ]
+          }
+        ]
+      },
+      "completionPolicy": {
+        "artifactCheck": true,
+        "semanticVerification": false,
+        "needsRevisionBlocks": true,
+        "findingsAreSuccess": false,
+        "failedBlocks": true
+      },
+      "verification": {
+        "enabled": false,
+        "mode": "none",
+        "criteria": [],
+        "output": {
+          "path": "verification.json"
+        }
+      },
+      "layout": {
+        "x": 8,
+        "y": 8,
+        "width": 38
+      }
+    }
+  ],
+  "edges": []
+}
